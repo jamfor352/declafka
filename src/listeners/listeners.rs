@@ -1,6 +1,4 @@
 use log::{info, warn};
-use std::sync::Arc;
-
 use rdkafka::client::ClientContext;
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::stream_consumer::StreamConsumer;
@@ -8,7 +6,10 @@ use rdkafka::consumer::{BaseConsumer, CommitMode, Consumer, ConsumerContext, Reb
 use rdkafka::error::KafkaResult;
 use rdkafka::message::{Headers, Message};
 use rdkafka::topic_partition_list::TopicPartitionList;
-use tokio::sync::Notify;
+use rdkafka::Offset;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tokio::sync::watch::Receiver;
 
 struct CustomContext;
 
@@ -31,7 +32,7 @@ impl ConsumerContext for CustomContext {
 // A type alias with your custom consumer can be created for convenience.
 type LoggingConsumer = StreamConsumer<CustomContext>;
 
-pub async fn consume_and_print(brokers: &str, group_id: &str, shutdown_notify: Arc<Notify>) {
+pub async fn consume_and_print(brokers: &str, group_id: &str, mut shutdown_notify: Receiver<bool>, kafka_offset_tracker: Arc<Mutex<HashMap<i32, i64>>>) {
     let context = CustomContext;
 
     let consumer: LoggingConsumer = ClientConfig::new()
@@ -57,6 +58,13 @@ pub async fn consume_and_print(brokers: &str, group_id: &str, shutdown_notify: A
                 match result {
                     Err(e) => warn!("Kafka error: {}", e),
                     Ok(m) => {
+                        let partition = m.partition();
+                        let offset = m.offset();
+
+                        // Store the latest offset for this partition
+                        let mut tracker = kafka_offset_tracker.lock().unwrap();
+                        tracker.insert(partition, offset);
+                        drop(tracker);
                         let payload = match m.payload_view::<str>() {
                             None => "",
                             Some(Ok(s)) => s,
@@ -65,19 +73,35 @@ pub async fn consume_and_print(brokers: &str, group_id: &str, shutdown_notify: A
                                 ""
                             }
                         };
-                        info!("key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
-                              m.key(), payload, m.topic(), m.partition(), m.offset(), m.timestamp());
+
+                        info!(
+                            "key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
+                            m.key(), payload, m.topic(), partition, offset, m.timestamp()
+                        );
+
                         if let Some(headers) = m.headers() {
                             for header in headers.iter() {
                                 info!("  Header {:#?}: {:?}", header.key, header.value);
                             }
                         }
+
+                        // Commit asynchronously as usual
                         consumer.commit_message(&m, CommitMode::Async).unwrap();
                     }
                 }
             },
-            _ = shutdown_notify.notified() => {
-                info!("Kafka consumer shutting down gracefully...");
+            _ = shutdown_notify.changed() => {
+                warn!("Kafka consumer shutting down gracefully...");
+
+                // Commit stored offsets synchronously
+                let tracker = kafka_offset_tracker.lock().unwrap();
+                for (&partition, &offset) in tracker.iter() {
+                    let mut topic_partition_list = rdkafka::TopicPartitionList::new();
+                    topic_partition_list.add_partition_offset("topic-a", partition, Offset::Offset(offset)).unwrap();
+
+                    consumer.commit(&topic_partition_list, CommitMode::Sync).unwrap();
+                    info!("Committed offset {} for partition {}", offset, partition);
+                }
                 break;
             }
         }
