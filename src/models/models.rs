@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 // Define the structure for the JWT claims
 #[derive(Serialize, Deserialize)]
 pub struct Claims {
-    pub(crate) sub: String,
-    pub(crate) exp: usize,
+    pub sub: String,
+    pub exp: usize,
 }
 
 // Define the structure for the User
