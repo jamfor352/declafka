@@ -1,6 +1,6 @@
-use actix_web::{web, HttpResponse, Responder};
 use crate::models::models::User;
 use crate::utils::utils::{create_jwt, validate_jwt};
+use actix_web::{web, HttpResponse, Responder};
 
 // Expose login and protected_route handlers
 pub async fn login(user: web::Json<User>) -> impl Responder {

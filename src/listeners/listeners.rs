@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use log::{info, warn};
+use std::sync::Arc;
 
 use rdkafka::client::ClientContext;
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
@@ -31,7 +31,7 @@ impl ConsumerContext for CustomContext {
 // A type alias with your custom consumer can be created for convenience.
 type LoggingConsumer = StreamConsumer<CustomContext>;
 
-pub async fn consume_and_print(brokers: &str, group_id: &str, topics: &[&str], shutdown_notify: Arc<Notify>) {
+pub async fn consume_and_print(brokers: &str, group_id: &str, shutdown_notify: Arc<Notify>) {
     let context = CustomContext;
 
     let consumer: LoggingConsumer = ClientConfig::new()
@@ -41,14 +41,15 @@ pub async fn consume_and_print(brokers: &str, group_id: &str, topics: &[&str], s
         .set("session.timeout.ms", "6000")
         .set("enable.auto.commit", "true")
         //.set("statistics.interval.ms", "30000")
-        //.set("auto.offset.reset", "smallest")
+        .set("auto.offset.reset", "earliest")
         .set_log_level(RDKafkaLogLevel::Debug)
         .create_with_context(context)
         .expect("Consumer creation failed");
 
     consumer
-        .subscribe(&topics.to_vec())
-        .expect("Can't subscribe to specified topics");
+        .subscribe(&["topic-a"])
+        .expect("Can't subscribe to topic-a");
+
 
     loop {
         tokio::select! {
@@ -67,10 +68,8 @@ pub async fn consume_and_print(brokers: &str, group_id: &str, topics: &[&str], s
                         info!("key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
                               m.key(), payload, m.topic(), m.partition(), m.offset(), m.timestamp());
                         if let Some(headers) = m.headers() {
-                            for i in 0..headers.count() {
-                                if let Some(header) = headers.get(i) {
-                                    info!("  Header {:#?}: {:?}", header.0, header.1);
-                                }
+                            for header in headers.iter() {
+                                info!("  Header {:#?}: {:?}", header.key, header.value);
                             }
                         }
                         consumer.commit_message(&m, CommitMode::Async).unwrap();

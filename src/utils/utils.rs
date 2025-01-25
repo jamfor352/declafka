@@ -1,5 +1,5 @@
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use crate::models::models::Claims;
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 
 const SECRET_KEY: &[u8] = b"secret_key";
 
