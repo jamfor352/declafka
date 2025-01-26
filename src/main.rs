@@ -2,13 +2,14 @@ use crate::kafka::kafka::OffsetReset::LATEST;
 use crate::kafka::kafka::{get_configuration, KafkaConfig, KafkaListener};
 use crate::listeners::listeners::{handle_my_struct, handle_normal_string};
 use crate::utils::deserializers::{my_struct_deserializer, string_deserializer};
+use crate::routes::routes::app;
 use actix_web::HttpServer;
-use customersvc::app;
 
 mod kafka;
 mod listeners;
 mod models;
 mod utils;
+mod routes;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
