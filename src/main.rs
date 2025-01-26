@@ -1,53 +1,44 @@
 use crate::handler::handler::wait_for_shutdown;
-use crate::listeners::listeners::KafkaListener;
+use crate::kafka::kafka::{get_configuration, KafkaListener};
+use crate::utils::deserializers::{my_struct_deserializer, string_deserializer};
 use actix_web::HttpServer;
 use customersvc::app;
 use log::info;
 use std::env;
+use rdkafka::ClientConfig;
 use tokio::sync::watch;
+use crate::listeners::listeners::{handle_my_struct, handle_normal_string};
 
-mod listeners;
 mod handler;
-
-#[derive(Debug, serde::Deserialize)]
-struct MyStruct {
-    field1: String,
-    field2: i32,
-}
+mod kafka;
+mod listeners;
+mod models;
+mod utils;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let brokers = env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:9092".to_string());
-    let group_id = env::var("KAFKA_GROUP_ID").unwrap_or_else(|_| "my-test-group".to_string());
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    let (shutdown_tx, shutdown_rx) = watch::channel(false); // ✅ Create a watch channel for shutdown
-    let shutdown_rx_json = shutdown_rx.clone();
-    let shutdown_rx_text = shutdown_rx.clone();
+    let config = get_configuration();
 
     // ✅ JSON Deserializer (for structured messages)
     let listener_json = KafkaListener::new(
         "topic-json",
-        brokers.clone(),
-        group_id.clone(),
-        shutdown_rx_json,
-        |payload| serde_json::from_slice::<MyStruct>(payload).ok(),  // ✅ JSON deserializer
-        |message: MyStruct| {
-            info!("Received JSON message with field 1 as: {} and field 2 as: {}", message.field1, message.field2);
-        },
+        config.clone(),
+        shutdown_rx.clone(),
+        my_struct_deserializer(),  // ✅ JSON deserializer
+        handle_my_struct,
     );
 
     // ✅ Plain Text Deserializer (for raw string messages)
     let listener_text = KafkaListener::new(
-        "topic-text",
-        brokers.clone(),
-        group_id.clone(),
-        shutdown_rx_text,
-        |payload| Some(String::from_utf8_lossy(payload).to_string()),  // ✅ Text deserializer
-        |message: String| {
-            info!("Received text message: {}", message);
-        },
+        "blah",
+        config,
+        shutdown_rx.clone(),
+        string_deserializer(),  // ✅ Text deserializer
+        handle_normal_string,
     );
 
     listener_json.start();
