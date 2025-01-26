@@ -20,7 +20,7 @@ async fn main() -> std::io::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let brokers = env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:9092".to_string());
-    let group_id = env::var("KAFKA_GROUP_ID").unwrap_or_else(|_| "example_consumer_group_id".to_string());
+    let group_id = env::var("KAFKA_GROUP_ID").unwrap_or_else(|_| "my-test-group".to_string());
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false); // ✅ Create a watch channel for shutdown
     let shutdown_rx_json = shutdown_rx.clone();
