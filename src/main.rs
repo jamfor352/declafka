@@ -1,12 +1,11 @@
 use crate::handler::handler::wait_for_shutdown;
-use crate::kafka::kafka::{get_configuration, KafkaListener};
+use crate::kafka::kafka::{get_configuration, KafkaConfig, KafkaListener};
 use crate::utils::deserializers::{my_struct_deserializer, string_deserializer};
 use actix_web::HttpServer;
 use customersvc::app;
 use log::info;
-use std::env;
-use rdkafka::ClientConfig;
 use tokio::sync::watch;
+use crate::kafka::kafka::OffsetReset::{EARLIEST, LATEST};
 use crate::listeners::listeners::{handle_my_struct, handle_normal_string};
 
 mod handler;
@@ -21,12 +20,18 @@ async fn main() -> std::io::Result<()> {
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    let config = get_configuration();
+    let default_config = get_configuration();
+
+    let json_config = KafkaConfig {
+        bootstrap_servers: default_config.bootstrap_servers.clone(),
+        auto_offset_reset: LATEST,
+        consumer_group: "test-json-consumer-group".to_string()
+    };
 
     // ✅ JSON Deserializer (for structured messages)
     let listener_json = KafkaListener::new(
         "topic-json",
-        config.clone(),
+        json_config,
         shutdown_rx.clone(),
         my_struct_deserializer(),  // ✅ JSON deserializer
         handle_my_struct,
@@ -34,8 +39,8 @@ async fn main() -> std::io::Result<()> {
 
     // ✅ Plain Text Deserializer (for raw string messages)
     let listener_text = KafkaListener::new(
-        "blah",
-        config,
+        "topic-test",
+        default_config,
         shutdown_rx.clone(),
         string_deserializer(),  // ✅ Text deserializer
         handle_normal_string,

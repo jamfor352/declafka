@@ -14,8 +14,8 @@ pub struct User {
     pub password: String,
 }
 
-#[derive(Debug, serde::Deserialize)]
-pub(crate) struct MyStruct {
+#[derive(Deserialize)]
+pub struct MyStruct {
     pub field1: String,
     pub field2: i32,
 }

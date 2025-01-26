@@ -25,9 +25,9 @@ impl OffsetReset {
 
 #[derive(Clone)]
 pub struct KafkaConfig {
-    bootstrap_servers: String,
-    auto_offset_reset: OffsetReset,
-    consumer_group: String,
+    pub bootstrap_servers: String,
+    pub auto_offset_reset: OffsetReset,
+    pub consumer_group: String,
 }
 
 pub struct KafkaListener<T> {
