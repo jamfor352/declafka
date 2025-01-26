@@ -5,6 +5,7 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::env;
 use std::sync::{Arc, Mutex};
+use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
 use tokio::task;
 
@@ -33,10 +34,10 @@ pub struct KafkaConfig {
 pub struct KafkaListener<T> {
     topic: String,
     client_config: KafkaConfig,
-    shutdown_rx: watch::Receiver<bool>,  // ✅ Store `Receiver<bool>` directly, NOT inside Arc
     offset_tracker: Arc<Mutex<HashMap<i32, i64>>>,
     handler: Arc<Box<dyn Fn(T) + Send + Sync>>,  // ✅ Use Arc to allow multiple uses
     deserializer: Arc<Box<dyn Fn(&[u8]) -> Option<T> + Send + Sync>>, // ✅ Custom deserializer
+    is_running: Arc<Mutex<bool>>,
 }
 
 impl<T> KafkaListener<T>
@@ -47,7 +48,6 @@ where
     pub fn new<F, D>(
         topic: &str,
         client_config: KafkaConfig,
-        shutdown_rx: watch::Receiver<bool>,
         deserializer: D,  // ✅ Accept custom deserializer
         handler: F,
     ) -> Self
@@ -58,15 +58,22 @@ where
         KafkaListener {
             topic: topic.to_string(),
             client_config,
-            shutdown_rx,
             offset_tracker: Arc::new(Mutex::new(HashMap::new())),
             handler: Arc::new(Box::new(handler)),
             deserializer: Arc::new(Box::new(deserializer)), // ✅ Store deserializer
+            is_running: Arc::new(Mutex::new(false)),
         }
     }
 
     /// Starts the Kafka consumer loop
     pub fn start(self) {
+
+        tokio::spawn(async move {
+            wait_for_shutdown().await;
+            info!("Shutdown signal received, notifying Kafka consumer...");
+
+        });
+
         task::spawn(async move {
             let consumer: StreamConsumer =
                 make(self.client_config.clone())
@@ -77,11 +84,22 @@ where
                 .subscribe(&[&self.topic])
                 .expect("Failed to subscribe to Kafka topic");
 
-            info!("Kafka listener started for topic: {}", self.topic);
+            // Sets the lock to true to indicate the consumer is running.
+            {
+                let mut is_running_lock = self.is_running.lock().unwrap(); // Acquire the lock
+                *is_running_lock = true; // Modify the value
+                info!("Kafka listener started for topic: {}", self.topic);
+            } // at this point, the lock is released.
 
-            let mut shutdown_rx = self.shutdown_rx.clone();  // ✅ Clone it before `tokio::select!`
+            // set up a shutdown watcher, so we can handle graceful shutdowns.
+            let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+            tokio::spawn(async move {
+                wait_for_shutdown().await;
+                info!("Shutdown signal received, notifying Kafka consumers...");
+                shutdown_tx.send(true).unwrap();
+            });
 
-            loop {
+            while *self.is_running.lock().unwrap() {
                 tokio::select! {
                     result = consumer.recv() => {
                         match result {
@@ -117,10 +135,14 @@ where
                             let mut topic_partition_list = rdkafka::TopicPartitionList::new();
                             topic_partition_list.add_partition_offset(&self.topic, partition, Offset::Offset(offset)).unwrap();
                             consumer.commit(&topic_partition_list, CommitMode::Sync).unwrap();
-                            info!("Kafka listener committed: partition {}, offset: {} for consumer group: {}", partition, offset, self.client_config.consumer_group);
+                            debug!("Kafka listener committed: partition {}, offset: {} for consumer group: {}", partition, offset, self.client_config.consumer_group);
                         }
 
-                        break;
+                        {
+                            let mut is_running_lock = self.is_running.lock().unwrap();
+                            *is_running_lock = false;
+                            debug!("Shutting down Kafka listener...");
+                        };
                     }
                 }
             }
@@ -147,5 +169,32 @@ pub fn get_configuration() -> KafkaConfig {
         bootstrap_servers: env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:9092".to_string()),
         auto_offset_reset: OffsetReset::EARLIEST,
         consumer_group: env::var("DEFAULT_CONSUMER_GROUP").unwrap_or_else(|_| "test-service".to_string()),
+    }
+}
+
+async fn wait_for_shutdown() {
+    #[cfg(unix)]
+    {
+        let mut sigint = signal(SignalKind::interrupt()).unwrap();   // Ctrl+C
+        let mut sigterm = signal(SignalKind::terminate()).unwrap();  // `kill` or system shutdown
+        let mut sigquit = signal(SignalKind::quit()).unwrap();
+
+        tokio::select! {
+            _ = sigint.recv() => {
+                info!("Received SIGINT (Ctrl+C), shutting down...");
+            },
+            _ = sigterm.recv() => {
+                info!("Received SIGTERM, shutting down...");
+            },
+            _ = sigquit.recv() => {
+                info!("Received SIGQUIT (Ctrl+\\), shutting down...");
+            },
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = signal::ctrl_c().await;
+        info!("Received Ctrl+C or termination signal, shutting down...");
     }
 }
