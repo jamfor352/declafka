@@ -1,13 +1,7 @@
 
-use crate::routes::routes::app;
 use actix_web::HttpServer;
-use listeners::listeners::{handle_my_struct_listener, handle_normal_string_listener};
-
-mod listeners;
-mod models;
-mod utils;
-mod routes;
-
+use my_kafka_app::listeners::listeners::{handle_my_struct_listener, handle_normal_string_listener};
+use my_kafka_app::routes::routes::app;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {

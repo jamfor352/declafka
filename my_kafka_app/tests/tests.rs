@@ -1,8 +1,8 @@
 use actix_web::body::to_bytes;
 use actix_web::{http::StatusCode, test};
-use customersvc::app;
 use serde_json::json;
 use std::str;
+use my_kafka_app::routes::routes::app;
 
 /// Test successful login
 #[actix_web::test]
