@@ -6,6 +6,7 @@ use quote::quote;
 use syn::{
     parse_macro_input, AttributeArgs, ItemFn, Meta, NestedMeta, Lit,
 };
+use my_kafka_lib::KafkaListener;
 
 /// Usage example:
 /// ```ignore
@@ -23,6 +24,12 @@ use syn::{
 ///   constructs a KafkaListener, calling your config + deserializer paths.
 #[proc_macro_attribute]
 pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
+
+    // This just adds an import so the compiler does not think the library is an unused dependency.
+    // In actual fact it IS used, but only explicitly inside a `quote!` however this is relied on
+    // actual functionality to work.
+    let _dummy: Option<KafkaListener<String>> = None;
+
     // Parse the user function that the attribute is applied to.
     let input_fn = parse_macro_input!(item as ItemFn);
 

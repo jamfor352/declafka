@@ -9,6 +9,4 @@ proc-macro = true
 [dependencies]
 quote = "1.0"
 syn = { version = "1.0", features = ["full"] }
-
-# If your macro references types from my_kafka_lib, add:
 my_kafka_lib = { path = "../my_kafka_lib" }
