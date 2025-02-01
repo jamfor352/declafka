@@ -992,7 +992,6 @@ dependencies = [
  "log",
  "rdkafka",
  "serde",
- "serde_json",
  "tokio",
 ]
 
