@@ -1,46 +1,57 @@
 
-use crate::listeners::listeners::{handle_my_struct, handle_normal_string};
 use crate::utils::deserializers::{my_struct_deserializer, string_deserializer};
 use crate::routes::routes::app;
 use actix_web::HttpServer;
-use my_kafka_lib::{get_configuration, KafkaConfig, KafkaListener};
+use log::info;
+use my_kafka_lib::{get_configuration, KafkaConfig};
 use my_kafka_lib::OffsetReset::LATEST;
+use my_kafka_macros::kafka_listener;
+use crate::models::models::MyStruct;
 
 mod listeners;
 mod models;
 mod utils;
 mod routes;
 
+
+#[kafka_listener(
+    topic = "topic-text",
+    config = "get_configuration",
+    deserializer = "string_deserializer"
+)]
+fn handle_text_message(msg: String) {
+    info!("Received TEXT: {}", msg);
+}
+
+pub fn json_config() -> KafkaConfig {
+    let mut cfg = get_configuration();
+    cfg.auto_offset_reset = LATEST;
+    cfg.consumer_group = "test-json-consumer-group".to_owned();
+    cfg
+}
+
+#[kafka_listener(
+    topic = "topic-json",
+    config = "get_configuration",
+    deserializer = "my_struct_deserializer"
+)]
+fn handle_json_message(msg: MyStruct) {
+    info!("Received JSON: field1='{}', field2={}", msg.field1, msg.field2);
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // init logs
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let default_config = get_configuration();
+    // We can now build them:
+    let text_listener = handle_text_message_listener();
+    let json_listener = handle_json_message_listener();
 
-    let json_config = KafkaConfig {
-        bootstrap_servers: default_config.bootstrap_servers.clone(),
-        auto_offset_reset: LATEST,
-        consumer_group: "test-json-consumer-group".to_string()
-    };
+    // Start them
+    text_listener.start();
+    json_listener.start();
 
-    // ✅ JSON Deserializer (for structured messages)
-    let listener_json = KafkaListener::new(
-        "topic-json",
-        json_config,
-        my_struct_deserializer(),  // ✅ JSON deserializer
-        handle_my_struct,
-    );
-
-    // ✅ Plain Text Deserializer (for raw string messages)
-    let listener_text = KafkaListener::new(
-        "topic-test",
-        default_config,
-        string_deserializer(),  // ✅ Text deserializer
-        handle_normal_string,
-    );
-
-    listener_json.start();
-    listener_text.start();
 
     HttpServer::new(|| {app() })
         .bind("127.0.0.1:8080")?

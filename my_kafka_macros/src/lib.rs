@@ -7,21 +7,26 @@ use syn::{
     parse_macro_input, AttributeArgs, ItemFn, Meta, NestedMeta, Lit,
 };
 
-/// Usage:
+/// Usage example:
 /// ```ignore
-/// #[kafka_listener(topic = "topic-name", config = "json_config", deserializer = "my_struct_deserializer")]
+/// #[kafka_listener(
+///     topic = "topic-name",
+///     config = "my_kafka_lib::get_configuration",
+///     deserializer = "my_kafka_lib::string_deserializer"
+/// )]
 /// fn my_handler(msg: MyStruct) { /* ... */ }
 /// ```
 ///
 /// Expands to:
 /// - your original `fn my_handler(...) { ... }`
-/// - plus a `fn my_handler_listener() -> KafkaListener<...>` factory
+/// - plus `fn my_handler_listener() -> my_kafka_lib::KafkaListener<...>` that
+///   constructs a KafkaListener, calling your config + deserializer paths.
 #[proc_macro_attribute]
 pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
-    // 1) Parse the function you put the attribute on
+    // Parse the user function that the attribute is applied to.
     let input_fn = parse_macro_input!(item as ItemFn);
 
-    // 2) Parse the attribute arguments: e.g. topic="topic-foo", config="json_config"
+    // Parse the attribute arguments: e.g. topic="topic-foo", config="json_config"
     let attr_args = parse_macro_input!(attrs as AttributeArgs);
 
     let mut topic: Option<String> = None;
@@ -77,26 +82,27 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
-    // Provide defaults if not specified
-    let topic_str = topic.unwrap_or_else(|| "<no_topic>".to_owned());
+    // Provide defaults if not specified (or if parse fails)
+    let default_config: syn::Path = syn::parse_quote! { my_kafka_lib::get_configuration };
+    let default_deser: syn::Path = syn::parse_quote! { my_kafka_lib::string_deserializer };
 
+    // If user gave "my_kafka_lib::some_config", parse it as a syn::Path. Otherwise use default.
     let config_fn_path = if let Some(cf) = config_fn {
-        syn::parse_str::<syn::Path>(&cf).unwrap_or_else(|_| {
-            syn::parse_quote! { get_configuration }
-        })
+        syn::parse_str::<syn::Path>(&cf).unwrap_or_else(|_| default_config.clone())
     } else {
-        syn::parse_quote! { get_configuration }
+        default_config.clone()
     };
 
     let deser_fn_path = if let Some(df) = deser_fn {
-        syn::parse_str::<syn::Path>(&df).unwrap_or_else(|_| {
-            syn::parse_quote! { string_deserializer }
-        })
+        syn::parse_str::<syn::Path>(&df).unwrap_or_else(|_| default_deser.clone())
     } else {
-        syn::parse_quote! { string_deserializer }
+        default_deser.clone()
     };
 
-    // The new "factory" function name:
+    let topic_str = topic.unwrap_or_else(|| "<no_topic>".to_owned());
+
+    // The new "factory" function name: e.g. for `fn handle_my_struct`,
+    // we generate `fn handle_my_struct_listener()`.
     let factory_fn_name = syn::Ident::new(
         &format!("{}_listener", fn_name),
         fn_name.span()
@@ -106,6 +112,14 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let original_fn = &input_fn;
 
     // Generate code
+    // We no longer prefix the user-supplied deserializer path with `my_kafka_lib::`.
+    // Instead, we do:
+    //
+    //   let cfg = [their config path]();
+    //   let deser = [their deserializer path]();
+    //
+    // Then pass them to `my_kafka_lib::KafkaListener::new(...)`.
+    //
     let expanded = quote! {
         // 1) Keep the original function
         #original_fn
@@ -113,16 +127,16 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
         // 2) Generate a function that returns KafkaListener<msg_type>
         #[allow(non_snake_case)]
         pub fn #factory_fn_name() -> my_kafka_lib::KafkaListener<#msg_type> {
-            let cfg = my_kafka_lib::#config_fn_path();
+            let cfg = #config_fn_path();
+            let deser = #deser_fn_path();
             my_kafka_lib::KafkaListener::new(
                 #topic_str,
                 cfg,
-                my_kafka_lib::#deser_fn_path(),
+                deser,
                 #fn_name,
             )
         }
     };
 
-    // Return the generated code
     expanded.into()
 }
