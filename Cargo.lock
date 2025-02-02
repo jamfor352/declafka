@@ -1001,6 +1001,7 @@ name = "my_kafka_macros"
 version = "0.1.0"
 dependencies = [
  "my_kafka_lib",
+ "proc-macro2",
  "quote",
  "syn",
 ]
