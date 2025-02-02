@@ -8,7 +8,7 @@ use syn::{
     parse_macro_input, ItemFn, Meta, Expr, ExprLit, Lit,
     punctuated::Punctuated, token::Comma,
     parse::{Parse, ParseStream},
-    Path,
+    Path, FnArg,
 };
 
 /// A small wrapper type that knows how to parse a comma-separated list of `Meta`.
@@ -20,6 +20,14 @@ impl Parse for MetaList {
         // Parse zero or more `Meta` items separated by commas
         let content = Punctuated::<Meta, Comma>::parse_terminated(input)?;
         Ok(MetaList(content))
+    }
+}
+
+/// A small helper to parse a user-supplied string into a `syn::Path` or fall back to a default.
+fn parse_or_default(user_value: &Option<String>, fallback: &Path) -> Path {
+    match user_value {
+        Some(s) => syn::parse_str::<Path>(s).unwrap_or_else(|_| fallback.clone()),
+        None    => fallback.clone(),
     }
 }
 
@@ -56,14 +64,12 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
     for meta in meta_list.0 {
         // We expect `Meta::NameValue(...)` for `key = "value"` style
         if let Meta::NameValue(nv) = meta {
-            // e.g. key = something, e.g. topic, config, deserializer
+            // The left side is e.g. `topic`, `config`, etc.
             let name = nv.path.get_ident().map(|id| id.to_string());
-
             if let Some(name) = name {
                 match name.as_str() {
                     "topic" => {
-                        // In Syn 2.0, the right-hand side is an `Expr`.
-                        // We expect a string literal, so let's match on Expr::Lit.
+                        // Right side is an Expr, we expect a string literal
                         if let Expr::Lit(ExprLit { lit: Lit::Str(lit_str), .. }) = &nv.value {
                             topic = Some(lit_str.value());
                         }
@@ -98,8 +104,9 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
             .into();
     }
 
+    // e.g. `fn handle_message(msg: SomeType)`
     let msg_type = match input_fn.sig.inputs.first().unwrap() {
-        syn::FnArg::Typed(pat_type) => &pat_type.ty,
+        FnArg::Typed(pat_type) => &pat_type.ty,
         _ => {
             return syn::Error::new_spanned(
                 &input_fn.sig,
@@ -114,17 +121,9 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let default_config: Path = syn::parse_quote! { my_kafka_lib::get_configuration };
     let default_deser: Path = syn::parse_quote! { my_kafka_lib::string_deserializer };
 
-    let config_fn_path = if let Some(cf) = config_fn {
-        syn::parse_str::<Path>(&cf).unwrap_or_else(|_| default_config.clone())
-    } else {
-        default_config.clone()
-    };
-
-    let deser_fn_path = if let Some(df) = deser_fn {
-        syn::parse_str::<Path>(&df).unwrap_or_else(|_| default_deser.clone())
-    } else {
-        default_deser.clone()
-    };
+    // Use our helper to parse or fall back
+    let config_fn_path = parse_or_default(&config_fn, &default_config);
+    let deser_fn_path  = parse_or_default(&deser_fn, &default_deser);
 
     let topic_str = topic.unwrap_or_else(|| "<no_topic>".to_owned());
 
