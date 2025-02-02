@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-log = "0.4"
-serde = { version = "1.0", features = ["derive"] }
-rdkafka = "0.30"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
+log = "0.4.25"
+serde = { version = "1.0.217", features = ["derive"] }
+rdkafka = "0.37.0"
+tokio = { version = "1.43.0", features = ["rt-multi-thread", "macros", "signal", "sync"] }
 
 [lib]
 name = "my_kafka_lib"
