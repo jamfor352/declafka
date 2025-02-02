@@ -1,5 +1,6 @@
 use log::{debug, info, warn};
-use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
+use rdkafka::consumer::{CommitMode, Consumer, ConsumerContext, StreamConsumer};
+use rdkafka::client::ClientContext;
 use rdkafka::{ClientConfig, Message, Offset};
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -9,6 +10,7 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
 use tokio::task;
 
+// Your existing OffsetReset enum and impl remain unchanged
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OffsetReset {
     EARLIEST,
@@ -31,12 +33,46 @@ pub struct KafkaConfig {
     pub consumer_group: String,
 }
 
+struct CustomContext {
+    topic: String,
+    offset_tracker: Arc<Mutex<HashMap<i32, i64>>>,
+}
+
+impl ClientContext for CustomContext {}
+
+impl ConsumerContext for CustomContext {
+    fn pre_rebalance(&self, _base_consumer: &rdkafka::consumer::BaseConsumer<CustomContext>, rebalance: &rdkafka::consumer::Rebalance) {
+        info!("Pre-rebalance: {:?}", rebalance);
+    }
+
+    fn post_rebalance(&self, base_consumer: &rdkafka::consumer::BaseConsumer<CustomContext>, rebalance: &rdkafka::consumer::Rebalance) {
+        info!("Post-rebalance: {:?}", rebalance);
+        if let rdkafka::consumer::Rebalance::Revoke(partitions) = rebalance {
+            let tracker = self.offset_tracker.lock().unwrap();
+            let mut tpl = rdkafka::TopicPartitionList::new();
+
+            for tp in partitions.elements() {
+                if let Some(&offset) = tracker.get(&tp.partition()) {
+                    tpl.add_partition_offset(&self.topic, tp.partition(), Offset::Offset(offset))
+                        .unwrap_or_else(|e| warn!("Failed to add partition to TPL: {}", e));
+                }
+            }
+
+            if tpl.count() > 0 {
+                if let Err(e) = base_consumer.commit(&tpl, CommitMode::Sync) {
+                    warn!("Failed to commit offsets during rebalance: {}", e);
+                }
+            }
+        }
+    }
+}
+
 pub struct KafkaListener<T> {
     topic: String,
     client_config: KafkaConfig,
     offset_tracker: Arc<Mutex<HashMap<i32, i64>>>,
-    handler: Arc<Box<dyn Fn(T) + Send + Sync>>,  // ✅ Use Arc to allow multiple uses
-    deserializer: Arc<Box<dyn Fn(&[u8]) -> Option<T> + Send + Sync>>, // ✅ Custom deserializer
+    handler: Arc<Box<dyn Fn(T) + Send + Sync>>,
+    deserializer: Arc<Box<dyn Fn(&[u8]) -> Option<T> + Send + Sync>>,
     is_running: Arc<Mutex<bool>>,
 }
 
@@ -44,54 +80,55 @@ impl<T> KafkaListener<T>
 where
     T: DeserializeOwned + Send + 'static,
 {
-    /// Creates a new KafkaListener for a given topic
     pub fn new<F, D>(
         topic: &str,
         client_config: KafkaConfig,
-        deserializer: D,  // ✅ Accept custom deserializer
+        deserializer: D,
         handler: F,
     ) -> Self
     where
         F: Fn(T) + Send + Sync + 'static,
-        D: Fn(&[u8]) -> Option<T> + Send + Sync + 'static,  // ✅ Generic deserializer
+        D: Fn(&[u8]) -> Option<T> + Send + Sync + 'static,
     {
         KafkaListener {
             topic: topic.to_string(),
             client_config,
             offset_tracker: Arc::new(Mutex::new(HashMap::new())),
             handler: Arc::new(Box::new(handler)),
-            deserializer: Arc::new(Box::new(deserializer)), // ✅ Store deserializer
+            deserializer: Arc::new(Box::new(deserializer)),
             is_running: Arc::new(Mutex::new(false)),
         }
     }
 
-    /// Starts the Kafka consumer loop
     pub fn start(self) {
-
         tokio::spawn(async move {
             wait_for_shutdown().await;
             info!("Shutdown signal received, notifying Kafka consumer...");
-
         });
 
         task::spawn(async move {
-            let consumer: StreamConsumer =
-                make(self.client_config.clone())
-                    .create()
-                    .expect("Failed to create Kafka consumer");
+            let context = CustomContext {
+                topic: self.topic.clone(),
+                offset_tracker: self.offset_tracker.clone(),
+            };
+
+            let consumer: StreamConsumer<CustomContext> = make(self.client_config.clone(), context)
+                .create_with_context(CustomContext {
+                    topic: self.topic.clone(),
+                    offset_tracker: self.offset_tracker.clone(),
+                })
+                .expect("Failed to create Kafka consumer");
 
             consumer
                 .subscribe(&[&self.topic])
                 .expect("Failed to subscribe to Kafka topic");
 
-            // Sets the lock to true to indicate the consumer is running.
             {
-                let mut is_running_lock = self.is_running.lock().unwrap(); // Acquire the lock
-                *is_running_lock = true; // Modify the value
+                let mut is_running_lock = self.is_running.lock().unwrap();
+                *is_running_lock = true;
                 info!("Kafka listener started for topic: {}", self.topic);
-            } // at this point, the lock is released.
+            }
 
-            // set up a shutdown watcher, so we can handle graceful shutdowns.
             let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
             tokio::spawn(async move {
                 wait_for_shutdown().await;
@@ -114,14 +151,14 @@ where
                                 tracker.insert(partition, next_offset);
 
                                 if let Some(payload) = m.payload() {
-                                    if let Some(parsed_msg) = (self.deserializer)(payload) {  // ✅ Call the custom deserializer
+                                    if let Some(parsed_msg) = (self.deserializer)(payload) {
                                         (self.handler)(parsed_msg);
                                     } else {
                                         warn!("Deserializer failed, skipping message. Raw payload: '{}'", String::from_utf8_lossy(payload));
                                     }
                                 }
 
-                                consumer.store_offset_from_message(&m).expect("Failed to store offset");  // ✅ Ensure Kafka knows what we're committing
+                                consumer.store_offset_from_message(&m).expect("Failed to store offset");
                                 consumer.commit_message(&m, CommitMode::Async).expect("Failed to commit offset");
                                 debug!("Kafka listener async committed offset {} for partition {}", next_offset, m.partition());
                             }
@@ -135,7 +172,8 @@ where
                             let mut topic_partition_list = rdkafka::TopicPartitionList::new();
                             topic_partition_list.add_partition_offset(&self.topic, partition, Offset::Offset(offset)).unwrap();
                             consumer.commit(&topic_partition_list, CommitMode::Sync).unwrap();
-                            debug!("Kafka listener committed: partition {}, offset: {} for consumer group: {}", partition, offset, self.client_config.consumer_group);
+                            debug!("Kafka listener committed: partition {}, offset: {} for consumer group: {}",
+                                  partition, offset, self.client_config.consumer_group);
                         }
 
                         {
@@ -152,18 +190,18 @@ where
     }
 }
 
-fn make(kafka_config: KafkaConfig) -> ClientConfig {
-    let debug = ClientConfig::new()
+fn make(kafka_config: KafkaConfig, _context: CustomContext) -> ClientConfig {
+    ClientConfig::new()
         .set("bootstrap.servers", kafka_config.bootstrap_servers)
         .set("enable.partition.eof", "false")
         .set("session.timeout.ms", "6000")
-        .set("auto.offset.reset", kafka_config.auto_offset_reset.as_str())  // ✅ Prevents unexpected in-memory overwrites
+        .set("auto.offset.reset", kafka_config.auto_offset_reset.as_str())
         .set("enable.auto.commit", "false")
         .set("group.id", kafka_config.consumer_group)
-        .clone();
-    debug
+        .clone()
 }
 
+// Your existing get_configuration function remains unchanged
 pub fn get_configuration() -> KafkaConfig {
     KafkaConfig {
         bootstrap_servers: env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:9092".to_string()),
@@ -172,11 +210,12 @@ pub fn get_configuration() -> KafkaConfig {
     }
 }
 
+// Your existing wait_for_shutdown function remains unchanged
 async fn wait_for_shutdown() {
     #[cfg(unix)]
     {
-        let mut sigint = signal(SignalKind::interrupt()).unwrap();   // Ctrl+C
-        let mut sigterm = signal(SignalKind::terminate()).unwrap();  // `kill` or system shutdown
+        let mut sigint = signal(SignalKind::interrupt()).unwrap();
+        let mut sigterm = signal(SignalKind::terminate()).unwrap();
         let mut sigquit = signal(SignalKind::quit()).unwrap();
 
         tokio::select! {
