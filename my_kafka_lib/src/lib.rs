@@ -118,7 +118,6 @@ pub enum Error {
     ValidationFailed(String),
 }
 
-#[allow(dead_code)]
 pub struct KafkaListener<T>
 where
     T: DeserializeOwned + Send + Clone + 'static,
@@ -183,7 +182,7 @@ where
 
             // Create consumer
             let consumer: StreamConsumer<CustomContext> = {
-                let config = make(self.client_config.clone(), context.clone());
+                let config = make(self.client_config.clone());
                 config.create_with_context(context)
                     .expect("Failed to create Kafka consumer")
             };
@@ -367,21 +366,20 @@ where
     }
 
     async fn process_message(&self, msg: &BorrowedMessage<'_>) -> Result<(), Error> {
-        warn!("Starting process_message for message from partition: {}, offset: {}", 
+        debug!("Processing message from partition: {}, offset: {}", 
               msg.partition(), msg.offset());
         
         let start = Instant::now();
         let payload = match msg.payload() {
             Some(p) => {
-                warn!("Payload received, size: {} bytes", p.len());
+                debug!("Payload received, size: {} bytes", p.len());
                 p
             },
             None => {
                 warn!("No payload found in message");
                 let error = Error::NoPayload;
-                // Try to send to DLQ before returning error
                 if let Some(dlq_producer) = &self.dead_letter_producer {
-                    warn!("DLQ producer found, attempting to send to DLQ");
+                    debug!("Sending message to DLQ");
                     if let Err(e) = self.send_to_dlq(dlq_producer, msg, error.clone()).await {
                         error!("Failed to send message to DLQ: {}", e);
                     }
@@ -390,18 +388,17 @@ where
             }
         };
         
-        warn!("Attempting to deserialize message");
+        debug!("Deserializing message");
         let parsed_msg = match (self.deserializer)(payload) {
             Some(msg) => {
-                warn!("Message successfully deserialized");
+                debug!("Message successfully deserialized");
                 msg
             },
             None => {
                 warn!("Deserialization failed");
                 let error = Error::DeserializationFailed;
-                // Try to send to DLQ before returning error
                 if let Some(dlq_producer) = &self.dead_letter_producer {
-                    warn!("DLQ producer found, attempting to send to DLQ");
+                    debug!("Sending message to DLQ");
                     if let Err(e) = self.send_to_dlq(dlq_producer, msg, error.clone()).await {
                         error!("Failed to send message to DLQ: {}", e);
                     }
@@ -414,12 +411,12 @@ where
         let mut last_error = None;
         let mut backoff = self.retry_config.initial_backoff_ms;
 
-        warn!("Starting processing attempts with max_attempts: {}", self.retry_config.max_attempts);
+        debug!("Starting processing attempts with max_attempts: {}", self.retry_config.max_attempts);
         while attempt < self.retry_config.max_attempts {
-            warn!("Processing attempt {}/{}", attempt + 1, self.retry_config.max_attempts);
+            debug!("Processing attempt {}/{}", attempt + 1, self.retry_config.max_attempts);
             match (self.handler)(parsed_msg.clone()) {
                 Ok(_) => {
-                    warn!("Message successfully processed on attempt {}", attempt + 1);
+                    debug!("Message successfully processed on attempt {}", attempt + 1);
                     self.metrics.messages_processed.fetch_add(1, Ordering::Relaxed);
                     self.metrics.total_processing_time_ms.fetch_add(
                         start.elapsed().as_millis() as u64,
@@ -429,12 +426,12 @@ where
                 }
                 Err(e) => {
                     attempt += 1;
-                    warn!("Attempt {} failed with error: {:?}", attempt, e);
+                    debug!("Attempt {} failed with error: {:?}", attempt, e);
                     self.metrics.retry_attempts.fetch_add(1, Ordering::Relaxed);
                     last_error = Some(e);
 
                     if attempt < self.retry_config.max_attempts {
-                        warn!("Retrying in {}ms", backoff);
+                        debug!("Retrying in {}ms", backoff);
                         tokio::time::sleep(Duration::from_millis(backoff)).await;
                         backoff = (backoff as f64 * self.retry_config.backoff_multiplier) as u64;
                         backoff = backoff.min(self.retry_config.max_backoff_ms);
@@ -443,20 +440,20 @@ where
             }
         }
 
-        warn!("All processing attempts failed");
+        debug!("All processing attempts failed");
         self.metrics.messages_failed.fetch_add(1, Ordering::Relaxed);
         
         // Clone last_error before sending to DLQ
         let error = last_error.clone().unwrap();
         
-        warn!("Checking for DLQ configuration");
+        debug!("Checking for DLQ configuration");
         // Send to dead letter queue if configured
         if let Some(dlq_producer) = &self.dead_letter_producer {
-            warn!("DLQ producer found, attempting to send to DLQ");
+            debug!("DLQ producer found, attempting to send to DLQ");
             if let Err(e) = self.send_to_dlq(dlq_producer, msg, error.clone()).await {
                 error!("Failed to send message to DLQ: {}", e);
             } else {
-                warn!("Successfully sent message to DLQ");
+                debug!("Successfully sent message to DLQ");
             }
         } else {
             warn!("No DLQ producer configured");
@@ -508,7 +505,7 @@ where
     }
 }
 
-fn make(kafka_config: KafkaConfig, _context: CustomContext) -> ClientConfig {
+fn make(kafka_config: KafkaConfig) -> ClientConfig {
     ClientConfig::new()
         .set("bootstrap.servers", kafka_config.bootstrap_servers)
         .set("enable.partition.eof", "false")
