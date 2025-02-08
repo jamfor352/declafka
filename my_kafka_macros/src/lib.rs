@@ -1,5 +1,7 @@
-//! my_kafka_macros/src/lib.rs
-//! Defines the #[kafka_listener(...)] attribute with Syn 2.0+.
+//! Procedural macro for defining Kafka message handlers
+//! 
+//! This crate provides the #[kafka_listener] attribute macro which generates
+//! boilerplate code for Kafka consumer setup and message handling.
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -22,7 +24,8 @@ impl Parse for MetaList {
     }
 }
 
-/// Represents the parsed kafka listener attributes
+/// Represents the parsed kafka listener attributes.
+/// Handles validation and provides defaults for optional parameters.
 struct KafkaListenerArgs {
     topic: String,
     config_fn: Path,

@@ -1,3 +1,8 @@
+//! Core Kafka consumer implementation with offset tracking and graceful shutdown.
+//! 
+//! This crate provides the runtime components for Kafka message consumption,
+//! including consumer management, offset tracking, and message deserialization.
+
 use log::{debug, info, warn};
 use rdkafka::consumer::{CommitMode, Consumer, ConsumerContext, StreamConsumer};
 use rdkafka::client::ClientContext;
@@ -80,6 +85,8 @@ impl<T> KafkaListener<T>
 where
     T: DeserializeOwned + Send + 'static,
 {
+    // Tracks message offsets per partition to ensure at-least-once delivery
+    // even during ungraceful shutdowns
     pub fn new<F, D>(
         topic: &str,
         client_config: KafkaConfig,
@@ -100,6 +107,7 @@ where
         }
     }
 
+    // Spawns the consumer task and sets up shutdown signal handling
     pub fn start(self) {
         tokio::spawn(async move {
             wait_for_shutdown().await;
