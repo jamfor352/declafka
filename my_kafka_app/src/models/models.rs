@@ -14,7 +14,7 @@ pub struct User {
     pub password: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct MyStruct {
     pub field1: String,
     pub field2: i32,

@@ -1,5 +1,5 @@
-use log::info;
-use my_kafka_lib::{get_configuration, KafkaConfig};
+use log::{info, error};
+use my_kafka_lib::{get_configuration, KafkaConfig, RetryConfig, Error, KafkaListener};
 use my_kafka_lib::OffsetReset::LATEST;
 use my_kafka_macros::kafka_listener;
 use utils::deserializers::{string_deserializer, my_struct_deserializer};
@@ -19,8 +19,12 @@ pub fn struct_config() -> KafkaConfig {
     config = "get_configuration",
     deserializer = "string_deserializer"
 )]
-pub fn handle_normal_string(message: String) {
+pub fn handle_normal_string(message: String) -> Result<(), Error> {
     info!("Received text message: {}", message);
+    if message.contains("error") {
+        return Err(Error::ProcessingFailed("Message contains error".into()));
+    }
+    Ok(())
 }
 
 #[kafka_listener(
@@ -28,6 +32,34 @@ pub fn handle_normal_string(message: String) {
     config = "struct_config",
     deserializer = "my_struct_deserializer"
 )]
-pub fn handle_my_struct(message: MyStruct) {
-    info!("Received JSON message with field 1 as: {} and field 2 as: {}", message.field1, message.field2);
+pub fn handle_my_struct(message: MyStruct) -> Result<(), Error> {
+    if message.field2 < 0 {
+        error!("Negative value in field2: {}", message.field2);
+        return Err(Error::ValidationFailed("field2 must be positive".into()));
+    }
+    
+    info!("Received JSON message with field 1 as: {} and field 2 as: {}", 
+          message.field1, message.field2);
+    Ok(())
+}
+
+fn create_retry_config(attempts: u32, initial_ms: u64, max_ms: u64) -> RetryConfig {
+    RetryConfig {
+        max_attempts: attempts,
+        initial_backoff_ms: initial_ms,
+        max_backoff_ms: max_ms,
+        backoff_multiplier: 2.0,
+    }
+}
+
+pub fn get_configured_listeners() -> (KafkaListener<String>, KafkaListener<MyStruct>) {
+    let string_listener = handle_normal_string_listener()
+        .with_retry_config(create_retry_config(2, 50, 5000))
+        .with_dead_letter_queue("topic-text-dlq");
+
+    let struct_listener = handle_my_struct_listener()
+        .with_retry_config(create_retry_config(3, 100, 10000))
+        .with_dead_letter_queue("topic-json-dlq");
+
+    (string_listener, struct_listener)
 }

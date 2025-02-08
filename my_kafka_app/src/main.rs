@@ -1,21 +1,45 @@
-
-use actix_web::HttpServer;
+use actix_web::{HttpServer, web, HttpResponse};
 use my_kafka_app::listeners::listeners::{handle_my_struct_listener, handle_normal_string_listener};
 use my_kafka_app::routes::routes::app;
+use my_kafka_lib::RetryConfig;
+use serde_json::json;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // init logs
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Initialize logging with info level
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .filter_level(log::LevelFilter::Info)
+        .init();
+
+    // Configure listeners with retry and DLQ
+    let string_listener = handle_normal_string_listener()
+        .with_retry_config(RetryConfig::default())
+        .with_dead_letter_queue("topic-text-dlq");
+
+    let struct_listener = handle_my_struct_listener()
+        .with_retry_config(RetryConfig::default())
+        .with_dead_letter_queue("topic-json-dlq");
 
     // Start the Kafka Listeners
-    handle_normal_string_listener().start();
-    handle_my_struct_listener().start();
+    string_listener.start();
+    struct_listener.start();
 
-    HttpServer::new(|| {app() })
-        .bind("127.0.0.1:8080")?
-        .run()
-        .await
+    // Start HTTP server with monitoring endpoints
+    HttpServer::new(move || {
+        app()
+            .route("/metrics", web::get().to(|| async { 
+                HttpResponse::Ok().body("Metrics coming soon") 
+            }))
+            .route("/health", web::get().to(|| async { 
+                HttpResponse::Ok().json(json!({
+                    "status": "healthy",
+                    "kafka_listeners": "running"
+                }))
+            }))
+    })
+    .bind("127.0.0.1:8080")?
+    .run()
+    .await
 }
 
 /*
