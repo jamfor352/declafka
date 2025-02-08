@@ -30,6 +30,11 @@ struct KafkaListenerArgs {
     topic: String,
     config_fn: Path,
     deser_fn: Path,
+    dlq_topic: Option<String>,
+    retry_max_attempts: Option<u32>,
+    retry_initial_backoff: Option<u64>,
+    retry_max_backoff: Option<u64>,
+    retry_multiplier: Option<f64>,
 }
 
 impl KafkaListenerArgs {
@@ -37,6 +42,11 @@ impl KafkaListenerArgs {
         let mut topic: Option<String> = None;
         let mut config_fn: Option<Path> = None;
         let mut deser_fn: Option<Path> = None;
+        let mut dlq_topic: Option<String> = None;
+        let mut retry_max_attempts: Option<u32> = None;
+        let mut retry_initial_backoff: Option<u64> = None;
+        let mut retry_max_backoff: Option<u64> = None;
+        let mut retry_multiplier: Option<f64> = None;
 
         for meta in meta_list.0 {
             if let Meta::NameValue(nv) = meta {
@@ -55,6 +65,21 @@ impl KafkaListenerArgs {
                     "deserializer" => {
                         let path_str = Self::extract_string_literal(&nv.value)?;
                         deser_fn = Some(syn::parse_str(&path_str)?);
+                    }
+                    "dlq_topic" => {
+                        dlq_topic = Some(Self::extract_string_literal(&nv.value)?);
+                    }
+                    "retry_max_attempts" => {
+                        retry_max_attempts = Some(Self::extract_literal_number(&nv.value)?);
+                    }
+                    "retry_initial_backoff" => {
+                        retry_initial_backoff = Some(Self::extract_literal_number(&nv.value)?);
+                    }
+                    "retry_max_backoff" => {
+                        retry_max_backoff = Some(Self::extract_literal_number(&nv.value)?);
+                    }
+                    "retry_multiplier" => {
+                        retry_multiplier = Some(Self::extract_literal_float(&nv.value)?);
                     }
                     _ => {
                         return Err(syn::Error::new_spanned(
@@ -84,6 +109,11 @@ impl KafkaListenerArgs {
             topic,
             config_fn: config_fn.unwrap_or(default_config),
             deser_fn: deser_fn.unwrap_or(default_deser),
+            dlq_topic,
+            retry_max_attempts,
+            retry_initial_backoff,
+            retry_max_backoff,
+            retry_multiplier,
         })
     }
 
@@ -92,6 +122,33 @@ impl KafkaListenerArgs {
             Ok(lit_str.value())
         } else {
             Err(syn::Error::new_spanned(expr, "Expected string literal"))
+        }
+    }
+
+    fn extract_literal_number<T>(expr: &Expr) -> syn::Result<T> 
+    where 
+        T: std::str::FromStr,
+        T::Err: std::fmt::Display,
+    {
+        match expr {
+            Expr::Lit(ExprLit { lit: Lit::Int(lit_int), .. }) => {
+                lit_int.base10_parse().map_err(|e| syn::Error::new_spanned(expr, e))
+            }
+            _ => Err(syn::Error::new_spanned(expr, "Expected integer literal"))
+        }
+    }
+
+    fn extract_literal_float(expr: &Expr) -> syn::Result<f64> {
+        match expr {
+            Expr::Lit(ExprLit { lit: Lit::Float(lit_float), .. }) => {
+                lit_float.base10_parse().map_err(|e| syn::Error::new_spanned(expr, e))
+            }
+            Expr::Lit(ExprLit { lit: Lit::Int(lit_int), .. }) => {
+                lit_int.base10_parse::<i64>()
+                    .map(|n| n as f64)
+                    .map_err(|e| syn::Error::new_spanned(expr, e))
+            }
+            _ => Err(syn::Error::new_spanned(expr, "Expected numeric literal"))
         }
     }
 }
@@ -152,6 +209,45 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let config_fn_path = &args.config_fn;
     let deser_fn_path = &args.deser_fn;
 
+    // Generate the retry config and DLQ setup
+    let retry_config = if args.retry_max_attempts.is_some() 
+        || args.retry_initial_backoff.is_some() 
+        || args.retry_max_backoff.is_some() 
+        || args.retry_multiplier.is_some() 
+    {
+        let max_attempts = args.retry_max_attempts
+            .map(|v| quote!(#v))
+            .unwrap_or(quote!(3));
+        let initial_backoff = args.retry_initial_backoff
+            .map(|v| quote!(#v))
+            .unwrap_or(quote!(100));
+        let max_backoff = args.retry_max_backoff
+            .map(|v| quote!(#v))
+            .unwrap_or(quote!(10000));
+        let multiplier = args.retry_multiplier
+            .map(|v| quote!(#v))
+            .unwrap_or(quote!(2.0));
+
+        quote! {
+            .with_retry_config(my_kafka_lib::RetryConfig {
+                max_attempts: #max_attempts,
+                initial_backoff_ms: #initial_backoff,
+                max_backoff_ms: #max_backoff,
+                backoff_multiplier: #multiplier,
+            })
+        }
+    } else {
+        quote!()
+    };
+
+    let dlq_setup = if let Some(dlq_topic) = args.dlq_topic {
+        quote! {
+            .with_dead_letter_queue(#dlq_topic)
+        }
+    } else {
+        quote!()
+    };
+
     let expanded = quote! {
         #input_fn
 
@@ -165,6 +261,8 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
                 deser,
                 #fn_name,
             )
+            #retry_config
+            #dlq_setup
         }
     };
 

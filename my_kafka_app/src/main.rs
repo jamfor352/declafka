@@ -1,30 +1,20 @@
 use actix_web::{HttpServer, web, HttpResponse};
 use my_kafka_app::listeners::listeners::{handle_my_struct_listener, handle_normal_string_listener};
 use my_kafka_app::routes::routes::app;
-use my_kafka_lib::RetryConfig;
 use serde_json::json;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // Initialize logging with info level
+    // Initialize logging
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .filter_level(log::LevelFilter::Info)
         .init();
 
-    // Configure listeners with retry and DLQ
-    let string_listener = handle_normal_string_listener()
-        .with_retry_config(RetryConfig::default())
-        .with_dead_letter_queue("topic-text-dlq");
-
-    let struct_listener = handle_my_struct_listener()
-        .with_retry_config(RetryConfig::default())
-        .with_dead_letter_queue("topic-json-dlq");
-
     // Start the Kafka Listeners
-    string_listener.start();
-    struct_listener.start();
+    handle_normal_string_listener().start();
+    handle_my_struct_listener().start();
 
-    // Start HTTP server with monitoring endpoints
+    // Start HTTP server
     HttpServer::new(move || {
         app()
             .route("/metrics", web::get().to(|| async { 

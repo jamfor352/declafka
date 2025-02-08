@@ -17,7 +17,12 @@ pub fn struct_config() -> KafkaConfig {
 #[kafka_listener(
     topic = "topic-text",
     config = "get_configuration",
-    deserializer = "string_deserializer"
+    deserializer = "string_deserializer",
+    dlq_topic = "topic-text-dlq",
+    retry_max_attempts = 2,
+    retry_initial_backoff = 50,
+    retry_max_backoff = 5000,
+    retry_multiplier = 2.0
 )]
 pub fn handle_normal_string(message: String) -> Result<(), Error> {
     info!("Received text message: {}", message);
@@ -30,7 +35,12 @@ pub fn handle_normal_string(message: String) -> Result<(), Error> {
 #[kafka_listener(
     topic = "topic-json",
     config = "struct_config",
-    deserializer = "my_struct_deserializer"
+    deserializer = "my_struct_deserializer",
+    dlq_topic = "topic-json-dlq",
+    retry_max_attempts = 3,
+    retry_initial_backoff = 100,
+    retry_max_backoff = 10000,
+    retry_multiplier = 2.0
 )]
 pub fn handle_my_struct(message: MyStruct) -> Result<(), Error> {
     if message.field2 < 0 {
