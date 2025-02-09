@@ -1,9 +1,9 @@
 use testcontainers::{
-    core::{WaitFor, IntoContainerPort},
+    core::{WaitFor, IntoContainerPort, ExecCommand},
     runners::AsyncRunner,
     GenericImage,
     ImageExt,
-    ContainerAsync,
+    ContainerAsync
 };
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use serde::{Serialize, Deserialize};
@@ -74,8 +74,22 @@ async fn setup_kafka() -> (ContainerAsync<GenericImage>, String) {
     
     info!("Waiting for Kafka to be fully ready on port {}...", host_port);
     sleep(Duration::from_secs(10)).await;
-    info!("Kafka setup complete");
+
+    // Create topics
+    let topics = ["test-topic", "test-topic-dlq", "test-dlq-topic", "test-topic-retry"];
+    for topic in topics {
+        info!("Creating topic: {}", topic);
+        container.exec(ExecCommand::new([
+            "kafka-topics",
+            "--create", 
+            "--topic", topic,
+            "--partitions", "1",
+            "--replication-factor", "1",
+            "--bootstrap-server", &format!("localhost:{}", mapped_port)
+        ])).await.expect("Failed to create topic");
+    }
     
+    info!("Kafka setup complete");
     (container, bootstrap_servers)
 }
 
@@ -132,7 +146,7 @@ fn retry_handler(_msg: TestMessage) -> Result<(), Error> {
 async fn test_kafka_functionality() {
     env_logger::builder()
         .format_timestamp_millis()
-        .filter_level(log::LevelFilter::Debug)
+        .filter_level(log::LevelFilter::Info)
         .init();
     
     info!("Starting Kafka integration tests");
@@ -219,9 +233,6 @@ async fn test_kafka_functionality() {
                 .key("1"),
             Duration::from_secs(5),
         ).await.expect("Failed to send message");
-
-        // Increase wait time from 5 to 15 seconds to allow for topic creation
-        sleep(Duration::from_secs(15)).await;
 
         let times = RETRY_ATTEMPTS.lock();
         assert_eq!(times.len(), 3, "Retry attempts count incorrect");
