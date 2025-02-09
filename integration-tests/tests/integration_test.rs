@@ -227,6 +227,7 @@ async fn test_kafka_functionality() {
             content: "will retry".into(),
         };
         
+        info!("Sending message to retry topic");
         producer.send(
             FutureRecord::to("test-topic-retry")
                 .payload(&serde_json::to_string(&test_msg).unwrap())
@@ -235,6 +236,7 @@ async fn test_kafka_functionality() {
         ).await.expect("Failed to send message");
 
         let times = RETRY_ATTEMPTS.lock();
+        info!("Retry attempts: {:?}", times);
         assert_eq!(times.len(), 3, "Retry attempts count incorrect");
         
         let intervals: Vec<_> = times.windows(2)
