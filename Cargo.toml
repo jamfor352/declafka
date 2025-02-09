@@ -3,5 +3,6 @@ resolver = "2"
 members = [
     "my_kafka_lib",
     "my_kafka_macros",
-    "my_kafka_app"
+    "my_kafka_app",
+    "integration-tests"
 ]
