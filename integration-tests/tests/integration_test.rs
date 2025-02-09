@@ -1,5 +1,9 @@
 use testcontainers::{
-    core::{ExecCommand, IntoContainerPort, WaitFor}, runners::AsyncRunner, ContainerAsync, GenericImage, ImageExt
+    core::{ExecCommand, IntoContainerPort, WaitFor}, 
+    runners::AsyncRunner, 
+    ContainerAsync, 
+    GenericImage, 
+    ImageExt
 };
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use serde::{Serialize, Deserialize};
@@ -12,18 +16,20 @@ use std::sync::Arc;
 use env_logger;
 use lazy_static::lazy_static;
 use log::{info, debug};
+use tokio::sync::OnceCell;
 
 // Static counters for our handlers
 lazy_static! {
     static ref PROCESSED_COUNT: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     static ref FAILED_COUNT: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    static ref RETRY_ATTEMPTS: Arc<parking_lot::Mutex<Vec<std::time::Instant>>> = 
+    static ref RETRY_ATTEMPTS: Arc<parking_lot::Mutex<Vec<std::time::Instant>>> =
         Arc::new(parking_lot::Mutex::new(Vec::new()));
     static ref GLOBAL_STATE: Arc<Mutex<HashMap<u32, TestMessage>>> =
         Arc::new(Mutex::new(HashMap::new()));
-    static ref KAFKA_CONTAINER_INFO: Arc<Mutex<Option<KafkaContainerInfo>>> =
-        Arc::new(Mutex::new(None));
 }
+
+// Use an async OnceCell to ensure the container is created only once
+static KAFKA_CONTAINER_INFO: OnceCell<KafkaContainerInfo> = OnceCell::const_new();
 
 struct KafkaContainerInfo {
     pub container: ContainerAsync<GenericImage>,
@@ -38,10 +44,28 @@ struct TestMessage {
 }
 
 // Helper function to create test configuration
-fn test_config() -> KafkaConfig {
+fn test_config_original() -> KafkaConfig {
     KafkaConfig {
         bootstrap_servers: "localhost:19092".to_string(),
-        consumer_group: "test-group".to_string(),
+        consumer_group: "test-group-original".to_string(),
+        auto_offset_reset: OffsetReset::EARLIEST,
+    }
+}
+
+// Helper function to create test configuration
+fn test_config_failure() -> KafkaConfig {
+    KafkaConfig {
+        bootstrap_servers: "localhost:19092".to_string(),
+        consumer_group: "test-group-failure".to_string(),
+        auto_offset_reset: OffsetReset::EARLIEST,
+    }
+}
+
+// Helper function to create test configuration
+fn test_config_retry() -> KafkaConfig {
+    KafkaConfig {
+        bootstrap_servers: "localhost:19092".to_string(),
+        consumer_group: "test-group-retry".to_string(),
         auto_offset_reset: OffsetReset::EARLIEST,
     }
 }
@@ -51,14 +75,14 @@ fn json_deserializer(payload: &[u8]) -> Option<TestMessage> {
     serde_json::from_slice(payload).ok()
 }
 
+/// Creates the Kafka container only once, no matter how many times called concurrently.
 async fn create_kafka_container() {
-    if KAFKA_CONTAINER_INFO.lock().unwrap().is_some() {
-        info!("Kafka container already exists, skipping creation");
-        return;
-    }
-
-    let kafka_container_info = create_kafka_container_delegate().await;
-    *KAFKA_CONTAINER_INFO.lock().unwrap() = Some(kafka_container_info);
+    // `get_or_init` ensures the async block only runs once. Subsequent calls await the same result.
+    KAFKA_CONTAINER_INFO
+        .get_or_init(|| async {
+            create_kafka_container_delegate().await
+        })
+        .await;
 }
 
 async fn create_kafka_container_delegate() -> KafkaContainerInfo {
@@ -84,7 +108,10 @@ async fn create_kafka_container_delegate() -> KafkaContainerInfo {
         .await
         .expect("Failed to start Kafka");
 
-    let host_port = container.get_host_port_ipv4(mapped_port).await.expect("Failed to get port");
+    let host_port = container
+        .get_host_port_ipv4(mapped_port)
+        .await
+        .expect("Failed to get port");
     let bootstrap_servers = format!("127.0.0.1:{}", host_port);
     
     info!("Waiting for Kafka to be fully ready on port {}...", host_port);
@@ -94,18 +121,24 @@ async fn create_kafka_container_delegate() -> KafkaContainerInfo {
     let topics = ["test-topic", "test-topic-dlq", "test-dlq-topic", "test-topic-retry"];
     for topic in topics {
         info!("Creating topic: {}", topic);
-        container.exec(ExecCommand::new([
-            "kafka-topics",
-            "--create", 
-            "--topic", topic,
-            "--partitions", "1",
-            "--replication-factor", "1",
-            "--bootstrap-server", &format!("localhost:{}", mapped_port)
-        ])).await.expect("Failed to create topic");
+        container
+            .exec(ExecCommand::new([
+                "kafka-topics",
+                "--create",
+                "--topic", topic,
+                "--partitions", "1",
+                "--replication-factor", "1",
+                "--bootstrap-server", &format!("localhost:{}", mapped_port)
+            ]))
+            .await
+            .expect("Failed to create topic");
     }
     
     info!("Kafka setup complete");
-    KafkaContainerInfo{container, bootstrap_servers}
+    KafkaContainerInfo {
+        container,
+        bootstrap_servers,
+    }
 }
 
 // Helper to create producer
@@ -114,7 +147,7 @@ fn create_producer(bootstrap_servers: &str) -> FutureProducer {
     rdkafka::ClientConfig::new()
         .set("bootstrap.servers", bootstrap_servers)
         .set("message.timeout.ms", "5000")
-        .set("debug", "all")  // Add debug logging
+        .set("debug", "all")  // Add debug logging if needed
         .create()
         .expect("Failed to create producer")
 }
@@ -122,7 +155,7 @@ fn create_producer(bootstrap_servers: &str) -> FutureProducer {
 // Define handlers outside of tests
 #[kafka_listener(
     topic = "test-topic",
-    config = "test_config",
+    config = "test_config_original",
     deserializer = "json_deserializer"
 )]
 fn test_handler(msg: TestMessage) -> Result<(), Error> {
@@ -135,7 +168,7 @@ fn test_handler(msg: TestMessage) -> Result<(), Error> {
 
 #[kafka_listener(
     topic = "test-topic-dlq",
-    config = "test_config",
+    config = "test_config_failure",
     deserializer = "json_deserializer",
     dlq_topic = "test-dlq-topic",
     retry_max_attempts = 3
@@ -147,7 +180,7 @@ fn failing_handler(_msg: TestMessage) -> Result<(), Error> {
 
 #[kafka_listener(
     topic = "test-topic-retry",
-    config = "test_config",
+    config = "test_config_retry",
     deserializer = "json_deserializer",
     retry_max_attempts = 3,
     retry_initial_backoff = 100,
@@ -166,18 +199,22 @@ fn get_state_for_id(id: u32) -> Option<TestMessage> {
 
 #[tokio::test]
 async fn test_kafka_functionality() {
-
     env_logger::builder()
         .format_timestamp_millis()
         .filter_level(log::LevelFilter::Info)
         .init();
     
     info!("Starting Kafka integration tests");
+
     // Setup Kafka once for all tests
     info!("Setting up Kafka container...");
     create_kafka_container().await;
-    
-    let producer = create_producer("localhost:19092");
+
+    // Now that it's created, retrieve info if needed
+    let container_info = KAFKA_CONTAINER_INFO
+        .get()
+        .expect("Kafka container should have been initialized");
+    let producer = create_producer(&container_info.bootstrap_servers);
 
     PROCESSED_COUNT.store(0, Ordering::SeqCst);
     
@@ -190,35 +227,47 @@ async fn test_kafka_functionality() {
             content: format!("test message {}", i),
         };
         
-        debug!("Sending message {}: {:?}", i, test_msg);
+        info!("Sending message {}: {:?}", i, test_msg);
         producer.send(
             FutureRecord::to("test-topic")
                 .payload(&serde_json::to_string(&test_msg).unwrap())
                 .key(&i.to_string()),
             Duration::from_secs(5),
-        ).await.expect("Failed to send message");
+        )
+        .await
+        .expect("Failed to send message");
     }
 
     sleep(Duration::from_secs(5)).await;
-    assert_eq!(PROCESSED_COUNT.load(Ordering::SeqCst), 5, "Basic message test failed");
-    for i in 0..5 {
+    assert_eq!(
+        PROCESSED_COUNT.load(Ordering::SeqCst),
+        5,
+        "Basic message test failed"
+    );
 
+    for i in 0..5 {
         let current_state = get_state_for_id(i);
         assert!(current_state.is_some(), "Message with id {} should be in state", i);
-        assert_eq!(current_state.unwrap().content, format!("test message {}", i), "Message content should match");
+        assert_eq!(
+            current_state.unwrap().content,
+            format!("test message {}", i),
+            "Message content should match"
+        );
     }
     info!("Basic message test completed!! 🚀");
 } 
 
 #[tokio::test]
 async fn test_failing_listener() {
-    
     info!("Starting Kafka integration tests");
-    // Setup Kafka once for all tests
+    // Setup Kafka once for all tests (if already created, this call just returns immediately)
     info!("Setting up Kafka container...");
     create_kafka_container().await;
     
-    let producer = create_producer("localhost:19092");
+    let container_info = KAFKA_CONTAINER_INFO
+        .get()
+        .expect("Kafka container should have been initialized");
+    let producer = create_producer(&container_info.bootstrap_servers);
 
     FAILED_COUNT.store(0, Ordering::SeqCst);
     let listener = failing_handler_listener();
@@ -234,9 +283,15 @@ async fn test_failing_listener() {
             .payload(&serde_json::to_string(&test_msg).unwrap())
             .key("1"),
         Duration::from_secs(5),
-    ).await.expect("Failed to send message");
+    )
+    .await
+    .expect("Failed to send message");
 
     sleep(Duration::from_secs(10)).await;
-    assert_eq!(FAILED_COUNT.load(Ordering::SeqCst), 3, "DLQ test failed");
+    assert_eq!(
+        FAILED_COUNT.load(Ordering::SeqCst),
+        3,
+        "DLQ test failed"
+    );
     info!("DLQ test completed!! 🚀");
 }
