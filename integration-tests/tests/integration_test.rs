@@ -42,7 +42,7 @@ struct TestMessage {
 
 // Container info struct.
 struct KafkaContainerInfo {
-    pub container: ContainerAsync<GenericImage>,
+    pub _container: ContainerAsync<GenericImage>,
     pub bootstrap_servers: String,
 }
 
@@ -125,7 +125,7 @@ async fn create_kafka_container_delegate() -> KafkaContainerInfo {
     
     info!("Kafka setup complete");
     KafkaContainerInfo {
-        container,
+        _container:container,
         bootstrap_servers,
     }
 }
