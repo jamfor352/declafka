@@ -23,11 +23,14 @@ use serde_json::json;
 use std::time::Instant;
 use chrono;
 
-// Your existing OffsetReset enum and impl remain unchanged
+// -----------------------------------------------------------------------------
+// OffsetReset and KafkaConfig
+// -----------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OffsetReset {
     EARLIEST,
-    LATEST
+    LATEST,
 }
 
 impl OffsetReset {
@@ -56,28 +59,41 @@ impl Default for KafkaConfig {
     }
 }
 
+// -----------------------------------------------------------------------------
+// CustomContext & Offset Tracker
+//
+// The offset tracker is now keyed by (topic, partition).
+// -----------------------------------------------------------------------------
+
 #[derive(Clone)]
 struct CustomContext {
-    topic: String,
-    offset_tracker: Arc<Mutex<HashMap<i32, i64>>>,
+    offset_tracker: Arc<Mutex<HashMap<(String, i32), i64>>>,
 }
 
 impl ClientContext for CustomContext {}
 
 impl ConsumerContext for CustomContext {
-    fn pre_rebalance(&self, _base_consumer: &rdkafka::consumer::BaseConsumer<CustomContext>, rebalance: &rdkafka::consumer::Rebalance) {
+    fn pre_rebalance(
+        &self,
+        _base_consumer: &rdkafka::consumer::BaseConsumer<CustomContext>,
+        rebalance: &rdkafka::consumer::Rebalance,
+    ) {
         info!("Pre-rebalance: {:?}", rebalance);
     }
 
-    fn post_rebalance(&self, base_consumer: &rdkafka::consumer::BaseConsumer<CustomContext>, rebalance: &rdkafka::consumer::Rebalance) {
+    fn post_rebalance(
+        &self,
+        base_consumer: &rdkafka::consumer::BaseConsumer<CustomContext>,
+        rebalance: &rdkafka::consumer::Rebalance,
+    ) {
         info!("Post-rebalance: {:?}", rebalance);
         if let rdkafka::consumer::Rebalance::Revoke(partitions) = rebalance {
             let tracker = self.offset_tracker.lock().unwrap();
             let mut tpl = rdkafka::TopicPartitionList::new();
 
             for tp in partitions.elements() {
-                if let Some(&offset) = tracker.get(&tp.partition()) {
-                    tpl.add_partition_offset(&self.topic, tp.partition(), Offset::Offset(offset))
+                if let Some(&offset) = tracker.get(&(tp.topic().to_string(), tp.partition())) {
+                    tpl.add_partition_offset(tp.topic(), tp.partition(), Offset::Offset(offset))
                         .unwrap_or_else(|e| warn!("Failed to add partition to TPL: {}", e));
                 }
             }
@@ -90,6 +106,10 @@ impl ConsumerContext for CustomContext {
         }
     }
 }
+
+// -----------------------------------------------------------------------------
+// RetryConfig, Error, Metrics, HealthCheck
+// -----------------------------------------------------------------------------
 
 pub struct RetryConfig {
     pub max_attempts: u32,
@@ -109,7 +129,6 @@ impl Default for RetryConfig {
     }
 }
 
-// Error type for the handler functions
 #[derive(Debug, Clone)]
 pub enum Error {
     NoPayload,
@@ -118,13 +137,50 @@ pub enum Error {
     ValidationFailed(String),
 }
 
+struct Metrics {
+    messages_processed: AtomicU64,
+    messages_failed: AtomicU64,
+    retry_attempts: AtomicU64,
+    dead_letter_messages: AtomicU64,
+    total_processing_time_ms: AtomicU64,
+}
+
+impl Metrics {
+    fn new() -> Self {
+        Self {
+            messages_processed: AtomicU64::new(0),
+            messages_failed: AtomicU64::new(0),
+            retry_attempts: AtomicU64::new(0),
+            dead_letter_messages: AtomicU64::new(0),
+            total_processing_time_ms: AtomicU64::new(0),
+        }
+    }
+}
+
+pub struct HealthCheck {
+    pub is_running: bool,
+    pub messages_processed: u64,
+    pub messages_failed: u64,
+    pub retry_attempts: u64,
+    pub dead_letter_messages: u64,
+    pub avg_processing_time_ms: f64,
+}
+
+// -----------------------------------------------------------------------------
+// KafkaListener
+//
+// This listener now “namespaces” its consumer group to be unique per topic.
+// It uses an offset tracker keyed by (topic, partition) and only processes messages
+// that match its configured topic.
+// -----------------------------------------------------------------------------
+
 pub struct KafkaListener<T>
 where
     T: DeserializeOwned + Send + Clone + 'static,
 {
-    topic: String,
+    topic: String, // configured topic
     client_config: KafkaConfig,
-    offset_tracker: Arc<Mutex<HashMap<i32, i64>>>,
+    offset_tracker: Arc<Mutex<HashMap<(String, i32), i64>>>,
     handler: Arc<Box<dyn Fn(T) -> Result<(), Error> + Send + Sync>>,
     deserializer: Arc<Box<dyn Fn(&[u8]) -> Option<T> + Send + Sync>>,
     is_running: Arc<Mutex<bool>>,
@@ -138,11 +194,12 @@ impl<T> KafkaListener<T>
 where
     T: DeserializeOwned + Send + Clone + 'static,
 {
-    // Tracks message offsets per partition to ensure at-least-once delivery
-    // even during ungraceful shutdowns
+    /// Create a new KafkaListener.
+    /// To avoid issues with merged subscriptions, we override the consumer group
+    /// by appending the topic name.
     pub fn new<F, D>(
         topic: &str,
-        client_config: KafkaConfig,
+        mut client_config: KafkaConfig,
         deserializer: D,
         handler: F,
     ) -> Self
@@ -150,6 +207,9 @@ where
         F: Fn(T) -> Result<(), Error> + Send + Sync + 'static,
         D: Fn(&[u8]) -> Option<T> + Send + Sync + 'static,
     {
+        // Override consumer group to be unique per topic.
+        client_config.consumer_group = format!("{}-{}", client_config.consumer_group, topic);
+
         KafkaListener {
             topic: topic.to_string(),
             client_config,
@@ -164,73 +224,69 @@ where
         }
     }
 
-    // Spawns the consumer task and sets up shutdown signal handling
+    /// Start the consumer.
     pub fn start(self) {
-        // Spawn shutdown signal handler
+        // Spawn a shutdown signal handler.
         tokio::spawn(async move {
             wait_for_shutdown().await;
             info!("Shutdown signal received, notifying Kafka consumer...");
         });
 
-        // Spawn main consumer task
+        // Spawn the main consumer task.
         task::spawn(async move {
-            // Create consumer context
             let context = CustomContext {
-                topic: self.topic.clone(),
                 offset_tracker: self.offset_tracker.clone(),
             };
 
-            // Create consumer
+            // Create consumer using the namespaced consumer group.
             let consumer: StreamConsumer<CustomContext> = {
                 let config = make(self.client_config.clone());
                 config.create_with_context(context)
                     .expect("Failed to create Kafka consumer")
             };
 
-            // Subscribe to topic
+            // Subscribe to the listener's topic.
             consumer
                 .subscribe(&[&self.topic])
                 .expect("Failed to subscribe to Kafka topic");
 
-            // Set running state
             {
                 let mut is_running = self.is_running.lock().unwrap();
                 *is_running = true;
                 info!("Kafka listener started for topic: {}", self.topic);
             }
 
-            // Create shutdown channel
+            // Create a shutdown channel.
             let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
-            // Spawn shutdown handler
+            // Spawn a shutdown notifier.
             tokio::spawn(async move {
                 wait_for_shutdown().await;
                 info!("Shutdown signal received, notifying Kafka consumers...");
                 let _ = shutdown_tx.send(true);
             });
 
-            // Main message processing loop
-            'main: while {
-                let is_running = self.is_running.lock().unwrap();
-                *is_running
-            } {
+            // Main message processing loop.
+            'main: while *self.is_running.lock().unwrap() {
                 tokio::select! {
                     result = consumer.recv() => {
                         match result {
                             Err(e) => warn!("Kafka error: {}", e),
                             Ok(m) => {
+                                // Only process messages for our configured topic.
+                                if m.topic() != self.topic {
+                                    debug!("Received message for topic {} (expected {}), skipping", m.topic(), self.topic);
+                                    continue;
+                                }
                                 let current_offset = m.offset();
                                 let partition = m.partition();
-                                debug!("Received message on partition {}, offset {}", 
-                                      partition, current_offset);
+                                debug!("Received message on partition {}, offset {}", partition, current_offset);
 
-                                // Update offset tracker
                                 {
                                     let mut tracker = self.offset_tracker.lock().unwrap();
-                                    tracker.insert(partition, current_offset + 1);
+                                    tracker.insert((m.topic().to_string(), partition), current_offset + 1);
                                 }
 
-                                // Process message
                                 if let Err(e) = self.process_message(&m).await {
                                     if self.dead_letter_producer.is_some() {
                                         warn!("Message processing failed (DLQ enabled): {:?}", e);
@@ -243,27 +299,24 @@ where
                     },
                     _ = shutdown_rx.changed() => {
                         warn!("Kafka listener shutting down gracefully...");
-                        
-                        // Commit final offsets
+
                         {
                             let tracker = self.offset_tracker.lock().unwrap();
-                            for (&partition, &offset) in tracker.iter() {
+                            for ((topic, partition), &offset) in tracker.iter() {
                                 let mut tpl = rdkafka::TopicPartitionList::new();
-                                tpl.add_partition_offset(&self.topic, partition, Offset::Offset(offset))
+                                tpl.add_partition_offset(topic, *partition, Offset::Offset(offset))
                                     .unwrap_or_else(|e| warn!("Failed to add partition to TPL: {}", e));
-                                
+
                                 if let Err(e) = consumer.commit(&tpl, CommitMode::Sync) {
                                     warn!("Failed to commit offset during shutdown: {}", e);
                                 }
                             }
                         }
 
-                        // Set running state to false
                         {
                             let mut is_running = self.is_running.lock().unwrap();
                             *is_running = false;
                         }
-                        
                         break 'main;
                     }
                 }
@@ -274,6 +327,7 @@ where
         });
     }
 
+    /// Returns a health check report.
     pub fn get_health_check(&self) -> HealthCheck {
         HealthCheck {
             is_running: *self.is_running.lock().unwrap(),
@@ -285,6 +339,7 @@ where
         }
     }
 
+    /// Exports metrics in Prometheus format.
     pub fn export_prometheus_metrics(&self) -> String {
         format!(
             "kafka_consumer_messages_processed {}\n\
@@ -310,47 +365,42 @@ where
         }
     }
 
+    /// Sends the message to the dead-letter queue.
     async fn send_to_dlq(
         &self,
         producer: &FutureProducer,
         original_msg: &BorrowedMessage<'_>,
         error: Error,
     ) -> Result<(), rdkafka::error::KafkaError> {
-        warn!("Starting DLQ process for message from topic: {}", self.topic);
-        
+        let msg_topic = original_msg.topic();
+        warn!("Starting DLQ process for message from topic: {}", msg_topic);
+
         let dlq_topic = self.dlq_topic.as_ref()
             .expect("DLQ topic must be set when dead_letter_producer is Some");
 
         warn!("Preparing to send message to DLQ topic: {}", dlq_topic);
-        
-        // Log the original message details
         warn!("Original message details - Partition: {}, Offset: {}, Error: {:?}",
               original_msg.partition(),
               original_msg.offset(),
               error);
-        
-        // Create an enriched payload with error context
+
         let dlq_payload = json!({
-            "original_topic": self.topic,
+            "original_topic": msg_topic,
             "original_partition": original_msg.partition(),
             "original_offset": original_msg.offset(),
             "error": format!("{:?}", error),
             "timestamp": chrono::Utc::now().to_rfc3339(),
-            "payload": String::from_utf8_lossy(
-                original_msg.payload().unwrap_or_default()
-            ),
+            "payload": String::from_utf8_lossy(original_msg.payload().unwrap_or_default()),
         });
 
         let payload_str = serde_json::to_string(&dlq_payload).unwrap();
         warn!("DLQ payload prepared: {}", payload_str);
-        
-        // Send to DLQ topic
+
         let record = FutureRecord::to(dlq_topic)
             .payload(&payload_str)
             .key(original_msg.key().unwrap_or_default());
 
         warn!("Attempting to send message to DLQ...");
-
         match producer.send(record, Duration::from_secs(5)).await {
             Ok((partition, offset)) => {
                 self.metrics.dead_letter_messages.fetch_add(1, Ordering::Relaxed);
@@ -365,10 +415,16 @@ where
         }
     }
 
+    /// Process an incoming message.
     async fn process_message(&self, msg: &BorrowedMessage<'_>) -> Result<(), Error> {
-        debug!("Processing message from partition: {}, offset: {}", 
-              msg.partition(), msg.offset());
-        
+        debug!("Processing message from topic: {}, partition: {}, offset: {}",
+               msg.topic(), msg.partition(), msg.offset());
+
+        if msg.topic() != self.topic {
+            debug!("Skipping message from topic {} (listener configured for {})", msg.topic(), self.topic);
+            return Ok(());
+        }
+
         let start = Instant::now();
         let payload = match msg.payload() {
             Some(p) => {
@@ -387,7 +443,7 @@ where
                 return Err(error);
             }
         };
-        
+
         debug!("Deserializing message");
         let parsed_msg = match (self.deserializer)(payload) {
             Some(msg) => {
@@ -423,7 +479,7 @@ where
                         Ordering::Relaxed,
                     );
                     return Ok(());
-                }
+                },
                 Err(e) => {
                     attempt += 1;
                     debug!("Attempt {} failed with error: {:?}", attempt, e);
@@ -442,12 +498,9 @@ where
 
         debug!("All processing attempts failed");
         self.metrics.messages_failed.fetch_add(1, Ordering::Relaxed);
-        
-        // Clone last_error before sending to DLQ
+
         let error = last_error.clone().unwrap();
-        
         debug!("Checking for DLQ configuration");
-        // Send to dead letter queue if configured
         if let Some(dlq_producer) = &self.dead_letter_producer {
             debug!("DLQ producer found, attempting to send to DLQ");
             if let Err(e) = self.send_to_dlq(dlq_producer, msg, error.clone()).await {
@@ -463,8 +516,8 @@ where
     }
 }
 
-impl<T> Default for KafkaListener<T> 
-where 
+impl<T> Default for KafkaListener<T>
+where
     T: DeserializeOwned + Send + Clone + 'static,
 {
     fn default() -> Self {
@@ -487,18 +540,20 @@ impl<T> KafkaListener<T>
 where
     T: DeserializeOwned + Send + Clone + 'static,
 {
+    /// Configure a dead-letter queue topic.
     pub fn with_dead_letter_queue(mut self, dlq_topic: &str) -> Self {
         let producer: FutureProducer = ClientConfig::new()
             .set("bootstrap.servers", &self.client_config.bootstrap_servers)
             .set("message.timeout.ms", "5000")
             .create()
             .expect("Failed to create DLQ producer");
-        
+
         self.dlq_topic = Some(dlq_topic.to_string());
         self.dead_letter_producer = Some(Arc::new(producer));
         self
     }
 
+    /// Configure a custom retry configuration.
     pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
         self.retry_config = config;
         self
@@ -516,7 +571,10 @@ fn make(kafka_config: KafkaConfig) -> ClientConfig {
         .clone()
 }
 
-// Your existing get_configuration function remains unchanged
+// -----------------------------------------------------------------------------
+// Helper functions
+// -----------------------------------------------------------------------------
+
 pub fn get_configuration() -> KafkaConfig {
     KafkaConfig {
         bootstrap_servers: env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:9092".to_string()),
@@ -525,7 +583,6 @@ pub fn get_configuration() -> KafkaConfig {
     }
 }
 
-// Your existing wait_for_shutdown function remains unchanged
 async fn wait_for_shutdown() {
     #[cfg(unix)]
     {
@@ -551,33 +608,4 @@ async fn wait_for_shutdown() {
         let _ = signal::ctrl_c().await;
         info!("Received Ctrl+C or termination signal, shutting down...");
     }
-}
-
-struct Metrics {
-    messages_processed: AtomicU64,
-    messages_failed: AtomicU64,
-    retry_attempts: AtomicU64,
-    dead_letter_messages: AtomicU64,
-    total_processing_time_ms: AtomicU64,
-}
-
-impl Metrics {
-    fn new() -> Self {
-        Self {
-            messages_processed: AtomicU64::new(0),
-            messages_failed: AtomicU64::new(0),
-            retry_attempts: AtomicU64::new(0),
-            dead_letter_messages: AtomicU64::new(0),
-            total_processing_time_ms: AtomicU64::new(0),
-        }
-    }
-}
-
-pub struct HealthCheck {
-    pub is_running: bool,
-    pub messages_processed: u64,
-    pub messages_failed: u64,
-    pub retry_attempts: u64,
-    pub dead_letter_messages: u64,
-    pub avg_processing_time_ms: f64,
 }
