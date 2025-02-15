@@ -9,16 +9,17 @@ use rdkafka::producer::{FutureProducer, FutureRecord};
 use serde::{Serialize, Deserialize};
 use my_kafka_lib::{KafkaConfig, OffsetReset, Error};
 use my_kafka_macros::kafka_listener;
-use std::{collections::HashMap, sync::Mutex, time::Duration};
+use std::{collections::HashMap, sync::Mutex, time::Duration, sync::Weak};
 use tokio::time::sleep;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use env_logger;
 use lazy_static::lazy_static;
 use log::info;
-use tokio::sync::OnceCell;
+// Use tokio's async Mutex so we can await while locking.
+use tokio::sync::Mutex as AsyncMutex;
 
-// Static counters for our handlers
+// Static counters and shared state for our handlers.
 lazy_static! {
     static ref PROCESSED_COUNT: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     static ref FAILED_COUNT: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
@@ -27,24 +28,25 @@ lazy_static! {
     static ref GLOBAL_STATE: Arc<Mutex<HashMap<u32, TestMessage>>> =
         Arc::new(Mutex::new(HashMap::new()));
     static ref LOG_SET_UP: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    // This global stores only a weak pointer to the container.
+    // It does not keep the container alive on its own.
+    static ref GLOBAL_KAFKA_CONTAINER: AsyncMutex<Weak<KafkaContainerInfo>> = AsyncMutex::new(Weak::new());
 }
 
-// Use an async OnceCell to ensure the container is created only once
-static KAFKA_CONTAINER_INFO: OnceCell<KafkaContainerInfo> = OnceCell::const_new();
-
-struct KafkaContainerInfo {
-    pub container: ContainerAsync<GenericImage>,
-    pub bootstrap_servers: String,
-}
-
-// Test message type
+// Test message type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TestMessage {
     id: u32,
     content: String,
 }
 
-// Helper function to create test configuration
+// Container info struct.
+struct KafkaContainerInfo {
+    pub container: ContainerAsync<GenericImage>,
+    pub bootstrap_servers: String,
+}
+
+// Helper function to create test configuration.
 fn test_config() -> KafkaConfig {
     KafkaConfig {
         bootstrap_servers: "localhost:19092".to_string(),
@@ -53,32 +55,25 @@ fn test_config() -> KafkaConfig {
     }
 }
 
-// Helper function to deserialise JSON messages
+// Helper function to deserialize JSON messages.
 fn json_deserializer(payload: &[u8]) -> Option<TestMessage> {
     serde_json::from_slice(payload).ok()
 }
 
-/// Creates the Kafka container only once, no matter how many times called concurrently.
-async fn create_kafka_container() {
-    // `get_or_init` ensures the async block only runs once. Subsequent calls await the same result.
-    KAFKA_CONTAINER_INFO
-        .get_or_init(|| async {
-            create_kafka_container_delegate().await
-        })
-        .await;
-}
-
+/// Initialize logging once.
 fn log_setup() {
     let mut log_setup = LOG_SET_UP.lock().unwrap();
     if !*log_setup {
         env_logger::builder()
-        .format_timestamp_millis()
-        .filter_level(log::LevelFilter::Info)
-        .init();
-    } 
-    *log_setup = true;
+            .format_timestamp_millis()
+            .filter_level(log::LevelFilter::Info)
+            .init();
+        *log_setup = true;
+    }
 }
 
+/// Creates the Kafka container and sets it up. This function is only called
+/// when no live container exists.
 async fn create_kafka_container_delegate() -> KafkaContainerInfo {
     info!("Starting Kafka container setup...");
 
@@ -111,9 +106,9 @@ async fn create_kafka_container_delegate() -> KafkaContainerInfo {
     info!("Waiting for Kafka to be fully ready on port {}...", host_port);
     sleep(Duration::from_secs(10)).await;
 
-    // Create topics
+    // Create topics.
     let topics = ["test-topic", "test-topic-dlq", "test-dlq-topic", "test-topic-retry"];
-    for topic in topics {
+    for topic in topics.iter() {
         info!("Creating topic: {}", topic);
         container
             .exec(ExecCommand::new([
@@ -135,18 +130,33 @@ async fn create_kafka_container_delegate() -> KafkaContainerInfo {
     }
 }
 
-// Helper to create producer
+/// Returns an Arc holding the Kafka container. If a container is already running
+/// (as determined by the weak global), it will be reused. Otherwise, a new container
+/// is created. By holding the lock during the entire check-and-create process,
+/// we avoid a race condition where two tasks try to create the container concurrently.
+async fn get_kafka_container() -> Arc<KafkaContainerInfo> {
+    let mut lock = GLOBAL_KAFKA_CONTAINER.lock().await;
+    if let Some(container) = lock.upgrade() {
+        return container;
+    }
+    // Create a new container while holding the lock.
+    let container = Arc::new(create_kafka_container_delegate().await);
+    *lock = Arc::downgrade(&container);
+    container
+}
+
+// Helper to create a Kafka producer.
 fn create_producer(bootstrap_servers: &str) -> FutureProducer {
     info!("Creating producer with bootstrap servers: {}", bootstrap_servers);
     rdkafka::ClientConfig::new()
         .set("bootstrap.servers", bootstrap_servers)
         .set("message.timeout.ms", "5000")
-        .set("debug", "all")  // Add debug logging if needed
+        .set("debug", "all")  // Add debug logging if needed.
         .create()
         .expect("Failed to create producer")
 }
 
-// Define handlers outside of tests
+// Define handlers outside of tests.
 #[kafka_listener(
     topic = "test-topic",
     config = "test_config",
@@ -197,12 +207,7 @@ async fn test_kafka_functionality() {
 
     info!("Starting Kafka integration tests");
     info!("Setting up Kafka container...");
-    create_kafka_container().await;
-
-    // Now that it's created, retrieve info if needed
-    let container_info = KAFKA_CONTAINER_INFO
-        .get()
-        .expect("Kafka container should have been initialized");
+    let container_info = get_kafka_container().await;
     let producer = create_producer(&container_info.bootstrap_servers);
 
     PROCESSED_COUNT.store(0, Ordering::SeqCst);
@@ -251,11 +256,7 @@ async fn test_failing_listener() {
     log_setup();
     info!("Starting Kafka integration tests");
     info!("Setting up Kafka container...");
-    create_kafka_container().await;
-    
-    let container_info = KAFKA_CONTAINER_INFO
-        .get()
-        .expect("Kafka container should have been initialized");
+    let container_info = get_kafka_container().await;
     let producer = create_producer(&container_info.bootstrap_servers);
 
     FAILED_COUNT.store(0, Ordering::SeqCst);
