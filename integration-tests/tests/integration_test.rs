@@ -26,6 +26,7 @@ lazy_static! {
         Arc::new(parking_lot::Mutex::new(Vec::new()));
     static ref GLOBAL_STATE: Arc<Mutex<HashMap<u32, TestMessage>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    static ref LOG_SET_UP: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
 }
 
 // Use an async OnceCell to ensure the container is created only once
@@ -65,6 +66,17 @@ async fn create_kafka_container() {
             create_kafka_container_delegate().await
         })
         .await;
+}
+
+fn log_setup() {
+    let mut log_setup = LOG_SET_UP.lock().unwrap();
+    if !*log_setup {
+        env_logger::builder()
+        .format_timestamp_millis()
+        .filter_level(log::LevelFilter::Info)
+        .init();
+    } 
+    *log_setup = true;
 }
 
 async fn create_kafka_container_delegate() -> KafkaContainerInfo {
@@ -181,14 +193,9 @@ fn get_state_for_id(id: u32) -> Option<TestMessage> {
 
 #[tokio::test]
 async fn test_kafka_functionality() {
-    env_logger::builder()
-        .format_timestamp_millis()
-        .filter_level(log::LevelFilter::Info)
-        .init();
-    
-    info!("Starting Kafka integration tests");
+    log_setup();
 
-    // Setup Kafka once for all tests
+    info!("Starting Kafka integration tests");
     info!("Setting up Kafka container...");
     create_kafka_container().await;
 
@@ -241,8 +248,8 @@ async fn test_kafka_functionality() {
 
 #[tokio::test]
 async fn test_failing_listener() {
+    log_setup();
     info!("Starting Kafka integration tests");
-    // Setup Kafka once for all tests (if already created, this call just returns immediately)
     info!("Setting up Kafka container...");
     create_kafka_container().await;
     
