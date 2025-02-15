@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use env_logger;
 use lazy_static::lazy_static;
-use log::{info, debug};
+use log::info;
 use tokio::sync::OnceCell;
 
 // Static counters for our handlers
@@ -44,28 +44,10 @@ struct TestMessage {
 }
 
 // Helper function to create test configuration
-fn test_config_original() -> KafkaConfig {
+fn test_config() -> KafkaConfig {
     KafkaConfig {
         bootstrap_servers: "localhost:19092".to_string(),
         consumer_group: "test-group-original".to_string(),
-        auto_offset_reset: OffsetReset::EARLIEST,
-    }
-}
-
-// Helper function to create test configuration
-fn test_config_failure() -> KafkaConfig {
-    KafkaConfig {
-        bootstrap_servers: "localhost:19092".to_string(),
-        consumer_group: "test-group-failure".to_string(),
-        auto_offset_reset: OffsetReset::EARLIEST,
-    }
-}
-
-// Helper function to create test configuration
-fn test_config_retry() -> KafkaConfig {
-    KafkaConfig {
-        bootstrap_servers: "localhost:19092".to_string(),
-        consumer_group: "test-group-retry".to_string(),
         auto_offset_reset: OffsetReset::EARLIEST,
     }
 }
@@ -155,20 +137,20 @@ fn create_producer(bootstrap_servers: &str) -> FutureProducer {
 // Define handlers outside of tests
 #[kafka_listener(
     topic = "test-topic",
-    config = "test_config_original",
+    config = "test_config",
     deserializer = "json_deserializer"
 )]
 fn test_handler(msg: TestMessage) -> Result<(), Error> {
     PROCESSED_COUNT.fetch_add(1, Ordering::SeqCst);
     let mut state = GLOBAL_STATE.lock().unwrap();
     state.insert(msg.id, msg.clone());
-    println!("Updated state with message: {:?}", msg);
+    info!("Updated state with message: {:?}", msg);
     Ok(())
 }
 
 #[kafka_listener(
     topic = "test-topic-dlq",
-    config = "test_config_failure",
+    config = "test_config",
     deserializer = "json_deserializer",
     dlq_topic = "test-dlq-topic",
     retry_max_attempts = 3
@@ -180,7 +162,7 @@ fn failing_handler(_msg: TestMessage) -> Result<(), Error> {
 
 #[kafka_listener(
     topic = "test-topic-retry",
-    config = "test_config_retry",
+    config = "test_config",
     deserializer = "json_deserializer",
     retry_max_attempts = 3,
     retry_initial_backoff = 100,
