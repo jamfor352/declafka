@@ -1,23 +1,17 @@
-use testcontainers::{
-    core::{ExecCommand, IntoContainerPort, WaitFor}, 
-    runners::AsyncRunner, 
-    ContainerAsync, 
-    GenericImage, 
-    ImageExt
-};
-use rdkafka::producer::{FutureProducer, FutureRecord};
+use global_kafka::{create_producer, get_kafka_container};
+use my_kafka_macros::kafka_listener;
+use rdkafka::producer::FutureRecord;
 use serde::{Serialize, Deserialize};
 use my_kafka_lib::{KafkaConfig, OffsetReset, Error};
-use my_kafka_macros::kafka_listener;
-use std::{collections::HashMap, sync::Mutex, time::Duration, sync::Weak};
+use std::{collections::HashMap, sync::Mutex, time::Duration};
 use tokio::time::sleep;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use env_logger;
 use lazy_static::lazy_static;
 use log::info;
-// Use tokio's async Mutex so we can await while locking.
-use tokio::sync::Mutex as AsyncMutex;
+
+mod global_kafka;
 
 // Static counters and shared state for our handlers.
 lazy_static! {
@@ -28,9 +22,6 @@ lazy_static! {
     static ref GLOBAL_STATE: Arc<Mutex<HashMap<u32, TestMessage>>> =
         Arc::new(Mutex::new(HashMap::new()));
     static ref LOG_SET_UP: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
-    // This global stores only a weak pointer to the container.
-    // It does not keep the container alive on its own.
-    static ref GLOBAL_KAFKA_CONTAINER: AsyncMutex<Weak<KafkaContainerInfo>> = AsyncMutex::new(Weak::new());
 }
 
 // Test message type.
@@ -38,12 +29,6 @@ lazy_static! {
 struct TestMessage {
     id: u32,
     content: String,
-}
-
-// Container info struct.
-struct KafkaContainerInfo {
-    pub _container: ContainerAsync<GenericImage>,
-    pub bootstrap_servers: String,
 }
 
 // Helper function to create test configuration.
@@ -72,89 +57,6 @@ fn log_setup() {
     }
 }
 
-/// Creates the Kafka container and sets it up. This function is only called
-/// when no live container exists.
-async fn create_kafka_container_delegate() -> KafkaContainerInfo {
-    info!("Starting Kafka container setup...");
-
-    let mapped_port = 19092;
-    let controller_port = 19093;
-
-    let container = GenericImage::new("confluentinc/cp-kafka", "latest")
-        .with_wait_for(WaitFor::message_on_stdout("Kafka Server started"))
-        .with_env_var("KAFKA_NODE_ID", "1")
-        .with_env_var("KAFKA_PROCESS_ROLES", "broker,controller")
-        .with_env_var("KAFKA_CONTROLLER_QUORUM_VOTERS", format!("1@127.0.0.1:{}", controller_port))
-        .with_env_var("KAFKA_LISTENERS", format!("PLAINTEXT://0.0.0.0:{},CONTROLLER://0.0.0.0:{}", mapped_port, controller_port))
-        .with_env_var("KAFKA_ADVERTISED_LISTENERS", format!("PLAINTEXT://127.0.0.1:{}", mapped_port))
-        .with_env_var("KAFKA_CONTROLLER_LISTENER_NAMES", "CONTROLLER")
-        .with_env_var("KAFKA_LISTENER_SECURITY_PROTOCOL_MAP", "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT")
-        .with_env_var("KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR", "1")
-        .with_env_var("CLUSTER_ID", "MkU3OEVBNTcwNTJENDM2Qk")
-        .with_mapped_port(mapped_port, mapped_port.tcp())
-        .with_mapped_port(controller_port, controller_port.tcp())
-        .start()
-        .await
-        .expect("Failed to start Kafka");
-
-    let host_port = container
-        .get_host_port_ipv4(mapped_port)
-        .await
-        .expect("Failed to get port");
-    let bootstrap_servers = format!("127.0.0.1:{}", host_port);
-    
-    info!("Waiting for Kafka to be fully ready on port {}...", host_port);
-    sleep(Duration::from_secs(10)).await;
-
-    // Create topics.
-    let topics = ["test-topic", "test-topic-dlq", "test-dlq-topic", "test-topic-retry"];
-    for topic in topics.iter() {
-        info!("Creating topic: {}", topic);
-        container
-            .exec(ExecCommand::new([
-                "kafka-topics",
-                "--create",
-                "--topic", topic,
-                "--partitions", "1",
-                "--replication-factor", "1",
-                "--bootstrap-server", &format!("localhost:{}", mapped_port)
-            ]))
-            .await
-            .expect("Failed to create topic");
-    }
-    
-    info!("Kafka setup complete");
-    KafkaContainerInfo {
-        _container:container,
-        bootstrap_servers,
-    }
-}
-
-/// Returns an Arc holding the Kafka container. If a container is already running
-/// (as determined by the weak global), it will be reused. Otherwise, a new container
-/// is created. By holding the lock during the entire check-and-create process,
-/// we avoid a race condition where two tasks try to create the container concurrently.
-async fn get_kafka_container() -> Arc<KafkaContainerInfo> {
-    let mut lock = GLOBAL_KAFKA_CONTAINER.lock().await;
-    if let Some(container) = lock.upgrade() {
-        return container;
-    }
-    // Create a new container while holding the lock.
-    let container = Arc::new(create_kafka_container_delegate().await);
-    *lock = Arc::downgrade(&container);
-    container
-}
-
-// Helper to create a Kafka producer.
-fn create_producer(bootstrap_servers: &str) -> FutureProducer {
-    info!("Creating producer with bootstrap servers: {}", bootstrap_servers);
-    rdkafka::ClientConfig::new()
-        .set("bootstrap.servers", bootstrap_servers)
-        .set("message.timeout.ms", "5000")
-        .set("debug", "all")  // Add debug logging if needed.
-        .create()
-        .expect("Failed to create producer")
-}
 
 // Define handlers outside of tests.
 #[kafka_listener(
