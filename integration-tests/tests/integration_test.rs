@@ -1,4 +1,5 @@
 use global_kafka::{create_producer, get_kafka_container};
+use logging_setup::log_setup;
 use my_kafka_macros::kafka_listener;
 use rdkafka::producer::FutureRecord;
 use serde::{Serialize, Deserialize};
@@ -7,11 +8,11 @@ use std::{collections::HashMap, sync::Mutex, time::Duration};
 use tokio::time::sleep;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use env_logger;
 use lazy_static::lazy_static;
 use log::info;
 
 mod global_kafka;
+mod logging_setup;
 
 // Static counters and shared state for our handlers.
 lazy_static! {
@@ -43,18 +44,6 @@ fn test_config() -> KafkaConfig {
 // Helper function to deserialize JSON messages.
 fn json_deserializer(payload: &[u8]) -> Option<TestMessage> {
     serde_json::from_slice(payload).ok()
-}
-
-/// Initialize logging once.
-fn log_setup() {
-    let mut log_setup = LOG_SET_UP.lock().unwrap();
-    if !*log_setup {
-        env_logger::builder()
-            .format_timestamp_millis()
-            .filter_level(log::LevelFilter::Info)
-            .init();
-        *log_setup = true;
-    }
 }
 
 
@@ -107,8 +96,6 @@ fn get_state_for_id(id: u32) -> Option<TestMessage> {
 async fn test_kafka_functionality() {
     log_setup();
 
-    info!("Starting Kafka integration tests");
-    info!("Setting up Kafka container...");
     let container_info = get_kafka_container().await;
     let producer = create_producer(&container_info.bootstrap_servers);
 
@@ -156,8 +143,7 @@ async fn test_kafka_functionality() {
 #[tokio::test]
 async fn test_failing_listener() {
     log_setup();
-    info!("Starting Kafka integration tests");
-    info!("Setting up Kafka container...");
+    
     let container_info = get_kafka_container().await;
     let producer = create_producer(&container_info.bootstrap_servers);
 
