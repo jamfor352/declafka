@@ -35,8 +35,8 @@ pub async fn create_kafka_container_delegate() -> KafkaContainerInfo {
     let mapped_port = 19092;
     let controller_port = 19093;
 
-    let container = GenericImage::new("confluentinc/cp-kafka", "latest")
-        .with_wait_for(WaitFor::message_on_stdout("Kafka Server started"))
+    let container = GenericImage::new("jamfor352/kafka-test-container", "latest")
+        .with_wait_for(WaitFor::healthcheck())
         .with_env_var("KAFKA_NODE_ID", "1")
         .with_env_var("KAFKA_PROCESS_ROLES", "broker,controller")
         .with_env_var("KAFKA_CONTROLLER_QUORUM_VOTERS", format!("1@127.0.0.1:{}", controller_port))
