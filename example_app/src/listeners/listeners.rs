@@ -8,7 +8,7 @@ use crate::utils;
 #[kafka_listener(
     topic = "topic-text",
     listener_id = "string-listener",
-    yaml_path = "kafka.yaml",
+    yaml_path = "example-app-kafka.yaml",
     deserializer = "string_deserializer",
     dlq_topic = "topic-text-dlq",
     retry_max_attempts = 2,
@@ -27,7 +27,7 @@ pub fn handle_normal_string(message: String) -> Result<(), Error> {
 #[kafka_listener(
     topic = "topic-json",
     listener_id = "json-listener",
-    yaml_path = "kafka.yaml",
+    yaml_path = "example-app-kafka.yaml",
     deserializer = "my_struct_deserializer",
     dlq_topic = "topic-json-dlq",
     retry_max_attempts = 3,
