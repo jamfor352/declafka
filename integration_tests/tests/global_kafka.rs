@@ -6,8 +6,7 @@ use testcontainers::{
     GenericImage, 
     ImageExt
 };
-use std::{time::Duration, sync::Weak};
-use tokio::time::sleep;
+use std::sync::Weak;
 use std::sync::Arc;
 use lazy_static::lazy_static;
 use log::info;
@@ -57,9 +56,7 @@ pub async fn create_kafka_container_delegate() -> KafkaContainerInfo {
         .await
         .expect("Failed to get port");
     let bootstrap_servers = format!("127.0.0.1:{}", host_port);
-    
-    info!("Waiting for Kafka to be fully ready on port {}...", host_port);
-    sleep(Duration::from_secs(10)).await;
+
 
     // Create topics.
     let topics = ["test-topic", "test-topic-dlq", "test-dlq-topic", "test-topic-retry"];
