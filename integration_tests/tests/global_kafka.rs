@@ -1,6 +1,11 @@
 use rdkafka::producer::FutureProducer;
 use testcontainers::{
-    core::{ExecCommand, IntoContainerPort, WaitFor}, 
+    core::{
+        ExecCommand, 
+        IntoContainerPort, 
+        WaitFor, 
+        logs::consumer::logging_consumer::LoggingConsumer
+    }, 
     runners::AsyncRunner, 
     ContainerAsync, 
     GenericImage, 
@@ -47,6 +52,7 @@ pub async fn create_kafka_container_delegate() -> KafkaContainerInfo {
         .with_env_var("CLUSTER_ID", "MkU3OEVBNTcwNTJENDM2Qk")
         .with_mapped_port(mapped_port, mapped_port.tcp())
         .with_mapped_port(controller_port, controller_port.tcp())
+        .with_log_consumer(LoggingConsumer::new().with_stderr_level(log::Level::Error))
         .start()
         .await
         .expect("Failed to start Kafka");
