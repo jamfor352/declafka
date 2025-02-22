@@ -45,7 +45,7 @@ pub async fn create_kafka_container_delegate() -> KafkaContainerInfo {
         .with_env_var("KAFKA_PROCESS_ROLES", "broker,controller")
         .with_env_var("KAFKA_CONTROLLER_QUORUM_VOTERS", format!("1@127.0.0.1:{}", controller_port))
         .with_env_var("KAFKA_LISTENERS", format!("PLAINTEXT://0.0.0.0:{},CONTROLLER://0.0.0.0:{}", mapped_port, controller_port))
-        .with_env_var("KAFKA_ADVERTISED_LISTENERS", format!("PLAINTEXT://127.0.0.1:{}", mapped_port))
+        .with_env_var("KAFKA_ADVERTISED_LISTENERS", format!("PLAINTEXT://127.0.0.1:{},CONTROLLER://127.0.0.1:{}", mapped_port, controller_port))
         .with_env_var("KAFKA_CONTROLLER_LISTENER_NAMES", "CONTROLLER")
         .with_env_var("KAFKA_LISTENER_SECURITY_PROTOCOL_MAP", "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT")
         .with_env_var("KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR", "1")
