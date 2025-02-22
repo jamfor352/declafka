@@ -4,7 +4,6 @@ use testcontainers::{
         ExecCommand, 
         IntoContainerPort, 
         WaitFor, 
-        logs::consumer::logging_consumer::LoggingConsumer
     }, 
     runners::AsyncRunner, 
     ContainerAsync, 
@@ -52,7 +51,7 @@ pub async fn create_kafka_container_delegate() -> KafkaContainerInfo {
         .with_env_var("CLUSTER_ID", "MkU3OEVBNTcwNTJENDM2Qk")
         .with_mapped_port(mapped_port, mapped_port.tcp())
         .with_mapped_port(controller_port, controller_port.tcp())
-        .with_log_consumer(LoggingConsumer::new().with_stderr_level(log::Level::Error))
+        // .with_log_consumer(LoggingConsumer::new().with_stderr_level(log::Level::Error))
         .start()
         .await
         .expect("Failed to start Kafka");
@@ -65,7 +64,7 @@ pub async fn create_kafka_container_delegate() -> KafkaContainerInfo {
 
 
     // Create topics.
-    let topics = ["test-topic", "test-topic-dlq", "test-dlq-topic", "test-topic-retry"];
+    let topics = ["test-topic", "test-topic-dlq"];
     for topic in topics.iter() {
         info!("Creating topic: {}", topic);
         container
@@ -73,7 +72,7 @@ pub async fn create_kafka_container_delegate() -> KafkaContainerInfo {
                 "kafka-topics",
                 "--create",
                 "--topic", topic,
-                "--partitions", "1",
+                "--partitions", "2",
                 "--replication-factor", "1",
                 "--bootstrap-server", &format!("localhost:{}", mapped_port)
             ]))

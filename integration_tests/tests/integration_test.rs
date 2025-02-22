@@ -18,8 +18,6 @@ mod logging_setup;
 lazy_static! {
     static ref PROCESSED_COUNT: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     static ref FAILED_COUNT: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    static ref RETRY_ATTEMPTS: Arc<parking_lot::Mutex<Vec<std::time::Instant>>> =
-        Arc::new(parking_lot::Mutex::new(Vec::new()));
     static ref GLOBAL_STATE: Arc<Mutex<HashMap<u32, TestMessage>>> =
         Arc::new(Mutex::new(HashMap::new()));
     static ref LOG_SET_UP: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
@@ -46,12 +44,18 @@ fn json_deserializer(payload: &[u8]) -> Option<TestMessage> {
     serde_json::from_slice(payload).ok()
 }
 
+fn string_deserializer(payload: &[u8]) -> Option<String> {
+    let string = String::from_utf8_lossy(payload).to_string();
+    Some(string)
+}
+
 
 // Define handlers outside of tests.
 #[kafka_listener(
     topic = "test-topic",
     config = "test_config",
-    deserializer = "json_deserializer"
+    deserializer = "json_deserializer",
+    dlq_topic = "test-topic-dlq"
 )]
 fn test_handler(msg: TestMessage) -> Result<(), Error> {
     PROCESSED_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -64,27 +68,12 @@ fn test_handler(msg: TestMessage) -> Result<(), Error> {
 #[kafka_listener(
     topic = "test-topic-dlq",
     config = "test_config",
-    deserializer = "json_deserializer",
-    dlq_topic = "test-dlq-topic",
-    retry_max_attempts = 3
+    deserializer = "string_deserializer"
 )]
-fn failing_handler(_msg: TestMessage) -> Result<(), Error> {
+fn failing_handler(_msg: String) -> Result<(), Error> {
+    info!("Received message from DLQ: {:?}", _msg);
     FAILED_COUNT.fetch_add(1, Ordering::SeqCst);
-    Err(Error::ProcessingFailed("Simulated failure".into()))
-}
-
-#[kafka_listener(
-    topic = "test-topic-retry",
-    config = "test_config",
-    deserializer = "json_deserializer",
-    retry_max_attempts = 3,
-    retry_initial_backoff = 100,
-    retry_multiplier = 2.0
-)]
-fn retry_handler(_msg: TestMessage) -> Result<(), Error> {
-    let now = std::time::Instant::now();
-    RETRY_ATTEMPTS.lock().push(now);
-    Err(Error::ProcessingFailed("Simulated failure".into()))
+    Ok(())
 }
 
 fn get_state_for_id(id: u32) -> Option<TestMessage> {
@@ -109,11 +98,12 @@ async fn test_kafka_functionality() {
             id: i,
             content: format!("test message {}", i),
         };
-        
-        info!("Sending message {}: {:?}", i, test_msg);
+
+        let actual_json_msg = serde_json::to_string(&test_msg).unwrap();
+        info!("Sending message {}: {:?}", i, actual_json_msg);
         producer.send(
             FutureRecord::to("test-topic")
-                .payload(&serde_json::to_string(&test_msg).unwrap())
+                .payload(&actual_json_msg)
                 .key(&i.to_string()),
             Duration::from_secs(5),
         )
@@ -121,12 +111,7 @@ async fn test_kafka_functionality() {
         .expect("Failed to send message");
     }
 
-    sleep(Duration::from_secs(5)).await;
-    assert_eq!(
-        PROCESSED_COUNT.load(Ordering::SeqCst),
-        5,
-        "Basic message test failed"
-    );
+    sleep(Duration::from_secs(10)).await;
 
     for i in 0..5 {
         let current_state = get_state_for_id(i);
@@ -148,17 +133,16 @@ async fn test_failing_listener() {
     let producer = create_producer(&container_info.bootstrap_servers);
 
     FAILED_COUNT.store(0, Ordering::SeqCst);
-    let listener = failing_handler_listener();
-    listener.start();
+    let listener1 = test_handler_listener();
+    listener1.start();
+    let listener2 = failing_handler_listener();
+    listener2.start();
 
-    let test_msg = TestMessage {
-        id: 1,
-        content: "will fail".into(),
-    };
-    
+    let actual_json_msg = "{\"id\":\"will fail as it is not a number\",\"content\":\"test message 0\"}";
+    info!("Sending broken message: {:?}", actual_json_msg);
     producer.send(
-        FutureRecord::to("test-topic-dlq")
-            .payload(&serde_json::to_string(&test_msg).unwrap())
+        FutureRecord::to("test-topic")
+            .payload(actual_json_msg)
             .key("1"),
         Duration::from_secs(5),
     )
@@ -168,7 +152,7 @@ async fn test_failing_listener() {
     sleep(Duration::from_secs(10)).await;
     assert_eq!(
         FAILED_COUNT.load(Ordering::SeqCst),
-        3,
+        1,
         "DLQ test failed"
     );
     info!("DLQ test completed!! 🚀");

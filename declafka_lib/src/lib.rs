@@ -479,7 +479,7 @@ where
                 warn!("No payload found in message");
                 let error = Error::NoPayload;
                 if let Some(producer) = &self.dead_letter_producer {
-                    debug!("Sending message to DLQ");
+                    warn!("Sending message to DLQ due to no payload");
                     if let Err(e) = self.send_to_dlq(producer, msg, error.clone()).await {
                         error!("Failed to send message to DLQ: {}", e);
                     }
@@ -498,7 +498,7 @@ where
                 warn!("Deserialization failed");
                 let error = Error::DeserializationFailed;
                 if let Some(producer) = &self.dead_letter_producer {
-                    debug!("Sending message to DLQ");
+                    warn!("Sending message to DLQ due to deserialization failure");
                     if let Err(e) = self.send_to_dlq(producer, msg, error.clone()).await {
                         error!("Failed to send message to DLQ: {}", e);
                     }
