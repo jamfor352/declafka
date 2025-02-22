@@ -24,10 +24,16 @@ lazy_static! {
 }
 
 // Test message type.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct TestMessage {
     id: u32,
     content: String,
+}
+
+impl TestMessage {
+    fn to_string(&self) -> String {
+        format!("id: {}, content: {}", self.id, self.content)
+    }
 }
 
 // Helper function to create test configuration.
@@ -61,7 +67,7 @@ fn test_handler(msg: TestMessage) -> Result<(), Error> {
     PROCESSED_COUNT.fetch_add(1, Ordering::SeqCst);
     let mut state = GLOBAL_STATE.lock().unwrap();
     state.insert(msg.id, msg.clone());
-    info!("Updated state with message: {:?}", msg);
+    info!("Updated state with message: {:?}", msg.to_string());
     Ok(())
 }
 
