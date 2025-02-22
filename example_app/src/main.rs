@@ -1,6 +1,6 @@
 use actix_web::{HttpServer, web, HttpResponse};
-use my_kafka_app::listeners::listeners::{handle_my_struct_listener, handle_normal_string_listener};
-use my_kafka_app::routes::routes::app;
+use example_app::listeners::listeners::{handle_my_struct_listener, handle_normal_string_listener};
+use example_app::routes::routes::app;
 use serde_json::json;
 
 #[actix_web::main]
