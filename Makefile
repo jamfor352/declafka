@@ -22,3 +22,14 @@ test: build
 .PHONY: clean
 clean:
 	docker rmi $(IMAGE_NAME) || true
+
+# Run the example app
+.PHONY: run
+run: build
+	docker-compose up -d
+	cargo run -p example_app
+
+# Stop the example app
+.PHONY: stop
+stop:
+	docker-compose down
