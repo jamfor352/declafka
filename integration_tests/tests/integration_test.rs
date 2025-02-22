@@ -3,7 +3,7 @@ use logging_setup::log_setup;
 use declafka_macro::kafka_listener;
 use rdkafka::producer::FutureRecord;
 use serde::{Serialize, Deserialize};
-use declafka_lib::{KafkaConfig, OffsetReset, Error};
+use declafka_lib::Error;
 use std::{collections::HashMap, sync::Mutex, time::Duration};
 use tokio::time::sleep;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -36,30 +36,20 @@ impl TestMessage {
     }
 }
 
-// Helper function to create test configuration.
-fn test_config() -> KafkaConfig {
-    KafkaConfig {
-        bootstrap_servers: "localhost:19092".to_string(),
-        consumer_group: "test-group-original".to_string(),
-        auto_offset_reset: OffsetReset::EARLIEST,
-    }
-}
-
 // Helper function to deserialize JSON messages.
 fn json_deserializer(payload: &[u8]) -> Option<TestMessage> {
     serde_json::from_slice(payload).ok()
 }
 
 fn string_deserializer(payload: &[u8]) -> Option<String> {
-    let string = String::from_utf8_lossy(payload).to_string();
-    Some(string)
+    String::from_utf8_lossy(payload).to_string().into()
 }
-
 
 // Define handlers outside of tests.
 #[kafka_listener(
     topic = "test-topic",
-    config = "test_config",
+    listener_id = "test-listener",
+    yaml_path = "test-kafka.yaml",
     deserializer = "json_deserializer",
     dlq_topic = "test-topic-dlq"
 )]
@@ -73,7 +63,8 @@ fn test_handler(msg: TestMessage) -> Result<(), Error> {
 
 #[kafka_listener(
     topic = "test-topic-dlq",
-    config = "test_config",
+    listener_id = "dlq-listener",
+    yaml_path = "test-kafka.yaml",
     deserializer = "string_deserializer"
 )]
 fn failing_handler(_msg: String) -> Result<(), Error> {
@@ -95,8 +86,8 @@ async fn test_kafka_functionality() {
     let producer = create_producer(&container_info.bootstrap_servers);
 
     PROCESSED_COUNT.store(0, Ordering::SeqCst);
-    
-    let listener = test_handler_listener();
+
+    let listener = test_handler_listener().expect("Failed to create test listener");
     listener.start();
 
     for i in 0..5 {
@@ -129,19 +120,19 @@ async fn test_kafka_functionality() {
         );
     }
     info!("Basic message test completed!! 🚀");
-} 
+}
 
 #[tokio::test]
 async fn test_failing_listener() {
     log_setup();
-    
+
     let container_info = get_kafka_container().await;
     let producer = create_producer(&container_info.bootstrap_servers);
 
     FAILED_COUNT.store(0, Ordering::SeqCst);
-    let listener1 = test_handler_listener();
+    let listener1 = test_handler_listener().expect("Failed to create test listener");
     listener1.start();
-    let listener2 = failing_handler_listener();
+    let listener2 = failing_handler_listener().expect("Failed to create DLQ listener");
     listener2.start();
 
     let actual_json_msg = "{\"id\":\"will fail as it is not a number\",\"content\":\"test message 0\"}";

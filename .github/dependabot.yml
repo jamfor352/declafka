@@ -17,7 +17,3 @@ updates:
     directory: "/integration_tests" # Location of package manifests
     schedule:
       interval: "weekly"
-  - package-ecosystem: "cargo" # See documentation for possible values
-    directory: "/example_app" # Location of package manifests
-    schedule:
-      interval: "weekly"

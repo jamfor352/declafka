@@ -1,11 +1,10 @@
 //! Procedural macro for defining Kafka message handlers
-//! 
+//!
 //! This crate provides the #[kafka_listener] attribute macro which generates
-//! boilerplate code for Kafka consumer setup and message handling.
+//! boilerplate code for Kafka consumer setup and message handling using a YAML configuration file.
 
 use proc_macro::TokenStream;
 use quote::quote;
-use declafka_lib::KafkaListener;
 use syn::{
     parse_macro_input, ItemFn, Meta, Expr, ExprLit, Lit,
     punctuated::Punctuated, token::Comma,
@@ -16,7 +15,6 @@ use syn::{
 /// A small wrapper type that knows how to parse a comma-separated list of `Meta`.
 struct MetaList(Punctuated<Meta, Comma>);
 
-/// Implement `Parse` so we can do `parse_macro_input!(attrs as MetaList)`.
 impl Parse for MetaList {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let content = Punctuated::<Meta, Comma>::parse_terminated(input)?;
@@ -25,10 +23,10 @@ impl Parse for MetaList {
 }
 
 /// Represents the parsed kafka listener attributes.
-/// Handles validation and provides defaults for optional parameters.
 struct KafkaListenerArgs {
     topic: String,
-    config_fn: Path,
+    listener_id: String,
+    yaml_path: String,
     deser_fn: Path,
     dlq_topic: Option<String>,
     retry_max_attempts: Option<u32>,
@@ -40,7 +38,8 @@ struct KafkaListenerArgs {
 impl KafkaListenerArgs {
     fn from_meta_list(meta_list: MetaList) -> syn::Result<Self> {
         let mut topic: Option<String> = None;
-        let mut config_fn: Option<Path> = None;
+        let mut listener_id: Option<String> = None;
+        let mut yaml_path: Option<String> = None;
         let mut deser_fn: Option<Path> = None;
         let mut dlq_topic: Option<String> = None;
         let mut retry_max_attempts: Option<u32> = None;
@@ -58,9 +57,11 @@ impl KafkaListenerArgs {
                     "topic" => {
                         topic = Some(Self::extract_string_literal(&nv.value)?);
                     }
-                    "config" => {
-                        let path_str = Self::extract_string_literal(&nv.value)?;
-                        config_fn = Some(syn::parse_str(&path_str)?);
+                    "listener_id" => {
+                        listener_id = Some(Self::extract_string_literal(&nv.value)?);
+                    }
+                    "yaml_path" => {
+                        yaml_path = Some(Self::extract_string_literal(&nv.value)?);
                     }
                     "deserializer" => {
                         let path_str = Self::extract_string_literal(&nv.value)?;
@@ -91,7 +92,7 @@ impl KafkaListenerArgs {
             }
         }
 
-        // Validate topic
+        // Validate required fields
         let topic = topic.ok_or_else(|| 
             syn::Error::new(proc_macro2::Span::call_site(), "topic attribute is required"))?;
         if topic.trim().is_empty() {
@@ -101,13 +102,31 @@ impl KafkaListenerArgs {
             ));
         }
 
-        // Use defaults if not specified
-        let default_config: Path = syn::parse_quote!(declafka_lib::get_configuration);
+        let listener_id = listener_id.ok_or_else(|| 
+            syn::Error::new(proc_macro2::Span::call_site(), "listener_id attribute is required"))?;
+        if listener_id.trim().is_empty() {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "listener_id cannot be empty"
+            ));
+        }
+
+        let yaml_path = yaml_path.ok_or_else(|| 
+            syn::Error::new(proc_macro2::Span::call_site(), "yaml_path attribute is required"))?;
+        if yaml_path.trim().is_empty() {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "yaml_path cannot be empty"
+            ));
+        }
+
+        // Use default deserializer if not specified
         let default_deser: Path = syn::parse_quote!(declafka_lib::string_deserializer);
 
         Ok(KafkaListenerArgs {
             topic,
-            config_fn: config_fn.unwrap_or(default_config),
+            listener_id,
+            yaml_path,
             deser_fn: deser_fn.unwrap_or(default_deser),
             dlq_topic,
             retry_max_attempts,
@@ -157,7 +176,8 @@ impl KafkaListenerArgs {
 /// ```ignore
 /// #[kafka_listener(
 ///     topic = "topic-name",
-///     config = "declafka_lib::get_configuration",
+///     listener_id = "listener-1",
+///     yaml_path = "kafka.yaml",
 ///     deserializer = "declafka_lib::string_deserializer"
 /// )]
 /// fn my_handler(msg: MyStruct) { /* ... */ }
@@ -165,12 +185,10 @@ impl KafkaListenerArgs {
 ///
 /// Expands to:
 /// - your original `fn my_handler(...) { ... }`
-/// - plus `fn my_handler_listener() -> declafka_lib::KafkaListener<...>` that
-///   constructs a KafkaListener, calling your config + deserializer paths.
+/// - plus `fn my_handler_listener() -> Result<declafka_lib::KafkaListener<...>, Box<dyn std::error::Error>>`
+///   that constructs a KafkaListener using the specified listener_id and yaml_path.
 #[proc_macro_attribute]
 pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
-    let _dummy: Option<KafkaListener<String>> = None;
-
     // Parse the function and attributes
     let input_fn = parse_macro_input!(item as ItemFn);
     let meta_list = parse_macro_input!(attrs as MetaList);
@@ -206,7 +224,8 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
 
     // Generate code
     let topic_str = &args.topic;
-    let config_fn_path = &args.config_fn;
+    let listener_id = &args.listener_id;
+    let yaml_path = &args.yaml_path;
     let deser_fn_path = &args.deser_fn;
 
     // Generate the retry config and DLQ setup
@@ -252,17 +271,18 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
         #input_fn
 
         #[allow(non_snake_case)]
-        pub fn #factory_fn_name() -> declafka_lib::KafkaListener<#msg_type> {
-            let cfg = #config_fn_path();
+        pub fn #factory_fn_name() -> Result<declafka_lib::KafkaListener<#msg_type>, Box<dyn std::error::Error>> {
             let deser = |payload: &[u8]| #deser_fn_path(payload);
             declafka_lib::KafkaListener::new(
                 #topic_str,
-                cfg,
+                #listener_id,
+                #yaml_path,
                 deser,
                 #fn_name,
             )
-            #retry_config
-            #dlq_setup
+            .map(|listener| {
+                listener #retry_config #dlq_setup
+            })
         }
     };
 

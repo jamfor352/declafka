@@ -10,6 +10,11 @@ rdkafka = "0.37.0"
 tokio = { version = "1.43.0", features = ["rt-multi-thread", "macros", "signal", "sync"] }
 serde_json = "1.0"
 chrono = "0.4"
+serde_yaml = "0.9.34"
+
+[dev-dependencies]
+tempfile = "3.6.0"
+ctor = "0.3.6"
 
 [lib]
 name = "declafka_lib"
