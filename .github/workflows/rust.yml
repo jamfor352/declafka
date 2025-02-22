@@ -30,17 +30,6 @@ jobs:
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
-    
-    # Install Rust toolchain
-    - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        override: true
-    
-    # Build with caching
-    - name: Build
-      run: cargo build --verbose
       
     # Run tests with timing and debug
     - name: Run tests
