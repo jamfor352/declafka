@@ -1,0 +1,22 @@
+[package]
+name = "example_app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4.9.0"
+actix-service = "2.0.2"
+serde = { version = "1.0.217", features = ["derive"] }
+jsonwebtoken = "9.3.1"
+env_logger = "0.11.6"
+serde_json = "1.0.138"
+
+# Bring in the library and macros from our repo. Note: Just specifying v0.0.2-alpha at time of writing - use the latest tag from the repo.
+declafka_lib = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.2-alpha" }
+declafka_macro = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.2-alpha" }
+log = "0.4.25"
+tokio = { version = "1.0.0", features = ["rt", "rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+

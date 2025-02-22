@@ -1,0 +1,8 @@
+kafka:
+  default:
+    bootstrap.servers: "localhost:9092"
+    auto.offset.reset: "earliest"
+  string-listener:
+    group.id: "test-listener-group"
+  json-listener:
+    group.id: "dlq-listener-group"
