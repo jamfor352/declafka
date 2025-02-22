@@ -49,25 +49,3 @@ jobs:
         echo "Starting tests at $(date)"
         time make test
         echo "Finished tests at $(date)"
-      # No continue-on-error here; let it fail naturally
-    
-    # Debug: Show running containers (only on failure)
-    - name: List running containers
-      if: failure()
-      run: docker ps -a
-    
-    # Debug: Fetch Kafka container logs (only on failure)
-    - name: Fetch Kafka container logs
-      if: failure()
-      run: |
-        KAFKA_CONTAINER=$(docker ps -a -q -f "ancestor=testcontainers/ryuk")
-        if [ -n "$KAFKA_CONTAINER" ]; then
-          echo "Fetching logs for Kafka container $KAFKA_CONTAINER"
-          docker logs "$KAFKA_CONTAINER"
-        else
-          echo "No Kafka container found. Listing all container logs:"
-          docker ps -a --format '{{.ID}} {{.Image}}' | while read -r id image; do
-            echo "Logs for container $id ($image):"
-            docker logs "$id"
-          done
-        fi
