@@ -4,7 +4,5 @@ kafka:
     auto.offset.reset: "earliest"
   test-listener:
     group.id: "test-listener-group"
-    bootstrap.servers: "localhost:19092"
   dlq-listener:
     group.id: "dlq-listener-group"
-    bootstrap.servers: "localhost:19092"

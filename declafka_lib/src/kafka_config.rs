@@ -79,9 +79,7 @@ impl ListenerConfig {
     fn apply_env_overrides(&mut self, listener_id: &str) {
         let apply = |field: &mut String, key: &str| {
             let upper_id = listener_id.to_uppercase();
-            // Try with underscores (e.g., KAFKA_LISTENER_1_BOOTSTRAP_SERVERS)
             let listener_key_underscore = format!("KAFKA_{}_{}", upper_id.replace('-', "_"), key);
-            // Try with hyphens (e.g., KAFKA_LISTENER-1_BOOTSTRAP_SERVERS)
             let listener_key_hyphen = format!("KAFKA_{}_{}", upper_id, key);
             let global_key = format!("KAFKA_GLOBAL_{}", key);
 
@@ -149,6 +147,47 @@ impl ListenerConfig {
 
         config
     }
+
+    /// Merges default config into this config, keeping existing values
+    fn merge_defaults(&mut self, defaults: &ListenerConfig) {
+        // Only override fields that aren't explicitly set (using default values)
+        if self.bootstrap_servers == default_bootstrap_servers() {
+            self.bootstrap_servers = defaults.bootstrap_servers.clone();
+        }
+        if self.group_id == default_group_id() {
+            self.group_id = defaults.group_id.clone();
+        }
+        if self.auto_offset_reset == default_auto_offset_reset() {
+            self.auto_offset_reset = defaults.auto_offset_reset.clone();
+        }
+        if self.enable_auto_commit == default_enable_auto_commit() {
+            self.enable_auto_commit = defaults.enable_auto_commit.clone();
+        }
+        if self.session_timeout_ms == default_session_timeout_ms() {
+            self.session_timeout_ms = defaults.session_timeout_ms.clone();
+        }
+        if self.heartbeat_interval_ms == default_heartbeat_interval_ms() {
+            self.heartbeat_interval_ms = defaults.heartbeat_interval_ms.clone();
+        }
+        if self.max_poll_interval_ms == default_max_poll_interval_ms() {
+            self.max_poll_interval_ms = defaults.max_poll_interval_ms.clone();
+        }
+        if self.fetch_max_bytes == default_fetch_max_bytes() {
+            self.fetch_max_bytes = defaults.fetch_max_bytes.clone();
+        }
+        if self.security_protocol == default_security_protocol() {
+            self.security_protocol = defaults.security_protocol.clone();
+        }
+        if self.sasl_mechanism.is_none() && defaults.sasl_mechanism.is_some() {
+            self.sasl_mechanism = defaults.sasl_mechanism.clone();
+        }
+        if self.sasl_username.is_none() && defaults.sasl_username.is_some() {
+            self.sasl_username = defaults.sasl_username.clone();
+        }
+        if self.sasl_password.is_none() && defaults.sasl_password.is_some() {
+            self.sasl_password = defaults.sasl_password.clone();
+        }
+    }
 }
 
 /// Loads Kafka configuration from a YAML file and applies environment overrides.
@@ -161,7 +200,12 @@ pub fn load_config(yaml_path: &str, listener_id: &str) -> Result<ClientConfig, B
     let mut listener_config = kafka_config.kafka.remove(listener_id)
         .ok_or_else(|| format!("Listener ID '{}' not found in YAML config", listener_id))?;
 
-    // Apply environment variable overrides
+    // Apply defaults if they exist
+    if let Some(default_config) = kafka_config.kafka.get("default") {
+        listener_config.merge_defaults(default_config);
+    }
+
+    // Apply environment variable overrides (after defaults)
     listener_config.apply_env_overrides(listener_id);
 
     info!("Loaded config for listener: {}", listener_id);
@@ -179,7 +223,6 @@ mod tests {
     #[cfg(test)]
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    // Force single-threaded execution for tests in this module
     #[cfg(test)]
     static TEST_THREAD_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -194,28 +237,24 @@ mod tests {
 
     #[test]
     fn test_yaml_and_env_overrides() {
-        // Create a temporary YAML file
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "kafka:\n  listener-1:\n    bootstrap.servers: \"original:9092\"\n    group.id: \"original-group\"").unwrap();
 
-        // Set environment variables
         env::set_var("KAFKA_LISTENER_1_BOOTSTRAP_SERVERS", "listener1:9092");
         env::set_var("KAFKA_GLOBAL_GROUP_ID", "global-group");
 
         let config = load_config(temp_file.path().to_str().unwrap(), "listener-1").unwrap();
 
-        assert_eq!(config.get("bootstrap.servers").unwrap(), "listener1:9092"); // Listener-specific override
-        assert_eq!(config.get("group.id").unwrap(), "global-group"); // Global override
-        assert_eq!(config.get("auto.offset.reset").unwrap(), "earliest"); // Default
+        assert_eq!(config.get("bootstrap.servers").unwrap(), "listener1:9092");
+        assert_eq!(config.get("group.id").unwrap(), "global-group");
+        assert_eq!(config.get("auto.offset.reset").unwrap(), "earliest");
 
-        // Clean up
         env::remove_var("KAFKA_LISTENER_1_BOOTSTRAP_SERVERS");
         env::remove_var("KAFKA_GLOBAL_GROUP_ID");
     }
 
     #[test]
     fn test_yaml_without_overrides() {
-        // Create a temporary YAML file
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "kafka:\n  listener-1:\n    bootstrap.servers: \"original:9092\"\n    group.id: \"original-group\"").unwrap();
 
@@ -228,7 +267,6 @@ mod tests {
 
     #[test]
     fn test_yaml_with_global_override_only() {
-        // Create a temporary YAML file
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "kafka:\n  listener-1:\n    bootstrap.servers: \"original:9092\"\n    group.id: \"original-group\"").unwrap();
 
@@ -240,7 +278,18 @@ mod tests {
         assert_eq!(config.get("group.id").unwrap(), "global-group");
         assert_eq!(config.get("auto.offset.reset").unwrap(), "earliest");
 
-        // Clean up
         env::remove_var("KAFKA_GLOBAL_GROUP_ID");
+    }
+
+    #[test]
+    fn test_yaml_with_default_inheritance() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "kafka:\n  default:\n    bootstrap.servers: \"localhost:19092\"\n    auto.offset.reset: \"earliest\"\n  test-listener:\n    group.id: \"test-listener-group\"").unwrap();
+
+        let config = load_config(temp_file.path().to_str().unwrap(), "test-listener").unwrap();
+
+        assert_eq!(config.get("bootstrap.servers").unwrap(), "localhost:19092");
+        assert_eq!(config.get("group.id").unwrap(), "test-listener-group");
+        assert_eq!(config.get("auto.offset.reset").unwrap(), "earliest");
     }
 }
