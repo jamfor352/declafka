@@ -8,15 +8,66 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1  # Enable backtraces for panics
 
 jobs:
-  build:
-
+  build-and-test:
     runs-on: ubuntu-latest
-
+    
     steps:
     - uses: actions/checkout@v4
+    
+    # Cache Rust dependencies
+    - name: Cache Rust dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+    
+    # Install Rust toolchain
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+    
+    # Build with caching
     - name: Build
-      run: cargo build
+      run: cargo build --verbose
+      
+    # Run tests with timing and debug
     - name: Run tests
-      run: make test
+      id: run-tests
+      run: |
+        echo "Starting tests at $(date)"
+        time make test
+        echo "Finished tests at $(date)"
+      # No continue-on-error here; let it fail naturally
+    
+    # Debug: Show running containers (only on failure)
+    - name: List running containers
+      if: failure()
+      run: docker ps -a
+    
+    # Debug: Fetch Kafka container logs (only on failure)
+    - name: Fetch Kafka container logs
+      if: failure()
+      run: |
+        KAFKA_CONTAINER=$(docker ps -a -q -f "ancestor=testcontainers/ryuk")
+        if [ -n "$KAFKA_CONTAINER" ]; then
+          echo "Fetching logs for Kafka container $KAFKA_CONTAINER"
+          docker logs "$KAFKA_CONTAINER"
+        else
+          echo "No Kafka container found. Listing all container logs:"
+          docker ps -a --format '{{.ID}} {{.Image}}' | while read -r id image; do
+            echo "Logs for container $id ($image):"
+            docker logs "$id"
+          done
+        fi
