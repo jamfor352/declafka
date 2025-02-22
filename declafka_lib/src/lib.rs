@@ -164,6 +164,8 @@ where
         // Validate the config exists during initialization
         let _ = load_config(yaml_path, listener_id)?;
 
+        info!("Kafka listener initialized with topic: {}, listener_id: {}, yaml_path: {}", topic, listener_id, yaml_path);
+
         Ok(Self {
             topic: topic.to_string(),
             listener_id: listener_id.to_string(),

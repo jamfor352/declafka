@@ -1,3 +1,4 @@
+use log::info;
 use rdkafka::ClientConfig;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
@@ -162,6 +163,9 @@ pub fn load_config(yaml_path: &str, listener_id: &str) -> Result<ClientConfig, B
 
     // Apply environment variable overrides
     listener_config.apply_env_overrides(listener_id);
+
+    info!("Loaded config for listener: {}", listener_id);
+    info!("Config: {:?}", listener_config);
 
     Ok(listener_config.to_client_config())
 }

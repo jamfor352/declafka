@@ -1,9 +1,10 @@
 kafka:
+  default:
+    bootstrap.servers: "localhost:19092"
+    auto.offset.reset: "earliest"
   test-listener:
+    group.id: "test-listener-group"
     bootstrap.servers: "localhost:19092"
-    group.id: "test-group-original"
-    auto.offset.reset: "earliest"
   dlq-listener:
+    group.id: "dlq-listener-group"
     bootstrap.servers: "localhost:19092"
-    group.id: "test-group-original"
-    auto.offset.reset: "earliest"
