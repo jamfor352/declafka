@@ -631,6 +631,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "declafka_lib"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "log",
+ "rdkafka",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "declafka_macro"
+version = "0.1.0"
+dependencies = [
+ "declafka_lib",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "deranged"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -748,6 +770,23 @@ dependencies = [
  "cfg-if",
  "home",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "example_app"
+version = "0.1.0"
+dependencies = [
+ "actix-service",
+ "actix-web",
+ "declafka_lib",
+ "declafka_macro",
+ "env_logger",
+ "jsonwebtoken",
+ "log",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-test",
 ]
 
 [[package]]
@@ -1297,14 +1336,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "integration-tests"
+name = "integration_tests"
 version = "0.1.0"
 dependencies = [
+ "declafka_lib",
+ "declafka_macro",
  "env_logger",
  "lazy_static",
  "log",
- "my_kafka_lib",
- "my_kafka_macros",
  "parking_lot",
  "rdkafka",
  "serde",
@@ -1477,45 +1516,6 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "my_kafka_app"
-version = "0.1.0"
-dependencies = [
- "actix-service",
- "actix-web",
- "env_logger",
- "jsonwebtoken",
- "log",
- "my_kafka_lib",
- "my_kafka_macros",
- "serde",
- "serde_json",
- "tokio",
- "tokio-test",
-]
-
-[[package]]
-name = "my_kafka_lib"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "log",
- "rdkafka",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "my_kafka_macros"
-version = "0.1.0"
-dependencies = [
- "my_kafka_lib",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]

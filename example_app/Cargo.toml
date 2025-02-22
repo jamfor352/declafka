@@ -1,5 +1,5 @@
 [package]
-name = "my_kafka_app"
+name = "example_app"
 version = "0.1.0"
 edition = "2021"
 
@@ -12,8 +12,8 @@ env_logger = "0.11.6"
 serde_json = "1.0.138"
 
 # Bring in the library and macros from our workspace
-my_kafka_lib = { path = "../my_kafka_lib" }
-my_kafka_macros = { path = "../my_kafka_macros" }
+declafka_lib = { path = "../declafka_lib" }
+declafka_macro = { path = "../declafka_macro" }
 log = "0.4.25"
 tokio = { version = "1.0.0", features = ["rt", "rt-multi-thread", "macros"] }
 

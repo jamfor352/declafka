@@ -1,7 +1,7 @@
 use log::{info, error};
-use my_kafka_lib::{get_configuration, KafkaConfig, RetryConfig, Error, KafkaListener};
-use my_kafka_lib::OffsetReset::LATEST;
-use my_kafka_macros::kafka_listener;
+use declafka_lib::{get_configuration, KafkaConfig, RetryConfig, Error, KafkaListener};
+use declafka_lib::OffsetReset::LATEST;
+use declafka_macro::kafka_listener;
 use utils::deserializers::{string_deserializer, my_struct_deserializer};
 use crate::models::models::MyStruct;
 use crate::utils;

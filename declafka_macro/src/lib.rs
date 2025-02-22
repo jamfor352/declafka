@@ -5,7 +5,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use my_kafka_lib::KafkaListener;
+use declafka_lib::KafkaListener;
 use syn::{
     parse_macro_input, ItemFn, Meta, Expr, ExprLit, Lit,
     punctuated::Punctuated, token::Comma,
@@ -102,8 +102,8 @@ impl KafkaListenerArgs {
         }
 
         // Use defaults if not specified
-        let default_config: Path = syn::parse_quote!(my_kafka_lib::get_configuration);
-        let default_deser: Path = syn::parse_quote!(my_kafka_lib::string_deserializer);
+        let default_config: Path = syn::parse_quote!(declafka_lib::get_configuration);
+        let default_deser: Path = syn::parse_quote!(declafka_lib::string_deserializer);
 
         Ok(KafkaListenerArgs {
             topic,
@@ -157,15 +157,15 @@ impl KafkaListenerArgs {
 /// ```ignore
 /// #[kafka_listener(
 ///     topic = "topic-name",
-///     config = "my_kafka_lib::get_configuration",
-///     deserializer = "my_kafka_lib::string_deserializer"
+///     config = "declafka_lib::get_configuration",
+///     deserializer = "declafka_lib::string_deserializer"
 /// )]
 /// fn my_handler(msg: MyStruct) { /* ... */ }
 /// ```
 ///
 /// Expands to:
 /// - your original `fn my_handler(...) { ... }`
-/// - plus `fn my_handler_listener() -> my_kafka_lib::KafkaListener<...>` that
+/// - plus `fn my_handler_listener() -> declafka_lib::KafkaListener<...>` that
 ///   constructs a KafkaListener, calling your config + deserializer paths.
 #[proc_macro_attribute]
 pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -229,7 +229,7 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
             .unwrap_or(quote!(2.0));
 
         quote! {
-            .with_retry_config(my_kafka_lib::RetryConfig {
+            .with_retry_config(declafka_lib::RetryConfig {
                 max_attempts: #max_attempts,
                 initial_backoff_ms: #initial_backoff,
                 max_backoff_ms: #max_backoff,
@@ -252,10 +252,10 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
         #input_fn
 
         #[allow(non_snake_case)]
-        pub fn #factory_fn_name() -> my_kafka_lib::KafkaListener<#msg_type> {
+        pub fn #factory_fn_name() -> declafka_lib::KafkaListener<#msg_type> {
             let cfg = #config_fn_path();
             let deser = |payload: &[u8]| #deser_fn_path(payload);
-            my_kafka_lib::KafkaListener::new(
+            declafka_lib::KafkaListener::new(
                 #topic_str,
                 cfg,
                 deser,

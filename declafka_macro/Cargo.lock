@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "my_kafka_macros"
+name = "declafka_macro"
 version = "0.1.0"

@@ -1,11 +1,11 @@
 [package]
-name = "integration-tests"
+name = "integration_tests"
 version = "0.1.0"
 edition = "2021"
 
 [dev-dependencies]
-my_kafka_lib = { path = "../my_kafka_lib" }
-my_kafka_macros = { path = "../my_kafka_macros" }
+declafka_lib = { path = "../declafka_lib" }
+declafka_macro = { path = "../declafka_macro" }
 testcontainers = { version = "0.23.2", features = ["blocking"] }
 tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }

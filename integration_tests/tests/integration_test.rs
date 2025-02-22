@@ -1,9 +1,9 @@
 use global_kafka::{create_producer, get_kafka_container};
 use logging_setup::log_setup;
-use my_kafka_macros::kafka_listener;
+use declafka_macro::kafka_listener;
 use rdkafka::producer::FutureRecord;
 use serde::{Serialize, Deserialize};
-use my_kafka_lib::{KafkaConfig, OffsetReset, Error};
+use declafka_lib::{KafkaConfig, OffsetReset, Error};
 use std::{collections::HashMap, sync::Mutex, time::Duration};
 use tokio::time::sleep;
 use std::sync::atomic::{AtomicU32, Ordering};

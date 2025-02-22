@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "my_kafka_lib",
-    "my_kafka_macros",
-    "my_kafka_app",
-    "integration-tests"
+    "declafka_lib",
+    "declafka_macro",
+    "example_app",
+    "integration_tests"
 ]
