@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::Read;
-use std::sync::LazyLock;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct KafkaConfig {
@@ -102,7 +101,7 @@ mod tests {
     #[cfg(test)]
     static TEST_THREAD_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-    static TEMP_FILE: LazyLock<NamedTempFile> = LazyLock::new(|| {
+    static TEMP_FILE: std::sync::LazyLock<NamedTempFile> = std::sync::LazyLock::new(|| {
         let mut temp_file = NamedTempFile::new().unwrap();
         let config_yaml_raw = r#"
         kafka:
@@ -163,5 +162,26 @@ mod tests {
         assert_eq!(config.get("auto.offset.reset").unwrap(), "earliest");
 
         env::remove_var("KAFKA_GLOBAL_GROUP_ID");
+    }
+
+    #[test]
+    fn test_yaml_with_default_inheritance() {
+        let default_inheritance_yaml = r#"
+        kafka:
+            default:
+                bootstrap.servers: "localhost:19092"
+                auto.offset.reset: "earliest"
+            test-listener:
+                group.id: "test-listener-group"
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "{}", default_inheritance_yaml).unwrap();
+
+        let config = load_config(temp_file.path().to_str().unwrap(), "test-listener").unwrap();
+
+        assert_eq!(config.get("bootstrap.servers").unwrap(), "localhost:19092");
+        assert_eq!(config.get("group.id").unwrap(), "test-listener-group");
+        assert_eq!(config.get("auto.offset.reset").unwrap(), "earliest");
     }
 }
