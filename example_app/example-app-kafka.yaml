@@ -2,6 +2,7 @@ kafka:
   default:
     bootstrap.servers: "localhost:9092"
     auto.offset.reset: "earliest"
+    security.protocol: "PLAINTEXT"
   string-listener:
     group.id: "test-listener-group"
   json-listener:

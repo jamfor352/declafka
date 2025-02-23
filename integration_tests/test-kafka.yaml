@@ -2,7 +2,10 @@ kafka:
   default:
     bootstrap.servers: "localhost:19092"
     auto.offset.reset: "earliest"
+    security.protocol: "PLAINTEXT"
   test-listener:
     group.id: "test-listener-group"
+  erroring-listener:
+    group.id: "erroring-listener-group"
   dlq-listener:
     group.id: "dlq-listener-group"

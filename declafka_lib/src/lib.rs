@@ -583,7 +583,7 @@ where
         self.retry_config = config;
         self
     }
-}
+}      
 
 // -----------------------------------------------------------------------------
 // Helper for graceful shutdown
@@ -651,11 +651,12 @@ mod tests {
     #[tokio::test]
     async fn test_process_message_failure_and_retry() {
         let mock_consumer = MockKafkaConsumer::new();
-        let attempt_count = Arc::new(AtomicUsize::new(0));
+        let attempt_count = Arc::new(AtomicUsize::new(1));
         let count_clone = attempt_count.clone();
         let handler = move |msg: String| {
             let attempts = count_clone.fetch_add(1, Ordering::SeqCst);
-            if attempts < 2 { Err(Error::ProcessingFailed("fail".into())) } else { Ok(()) }
+            println!("Processing message: {} for the {} time", msg, attempts);
+            if attempts < 3 { Err(Error::ProcessingFailed("fail".into())) } else { Ok(()) }
         };
         let deserializer = |payload: &[u8]| std::str::from_utf8(payload).ok().map(|s| s.to_string());
         let listener: KafkaListener<String, _> = KafkaListener::new(
@@ -675,6 +676,7 @@ mod tests {
         };
         let result = listener.process_message(test_msg).await;
         assert!(result.is_ok());
-        assert_eq!(attempt_count.load(Ordering::SeqCst), 3);
+        assert_eq!(attempt_count.load(Ordering::SeqCst), 4);
     }
 }
+

@@ -17,6 +17,7 @@ mod logging_setup;
 // Static counters and shared state for our handlers.
 lazy_static! {
     static ref PROCESSED_COUNT: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    static ref DLQ_ACTIVATION_COUNT: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     static ref FAILED_COUNT: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     static ref GLOBAL_STATE: Arc<Mutex<HashMap<u32, TestMessage>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -67,10 +68,26 @@ fn test_handler(msg: TestMessage) -> Result<(), Error> {
     yaml_path = "test-kafka.yaml",
     deserializer = "string_deserializer"
 )]
-fn failing_handler(_msg: String) -> Result<(), Error> {
+fn test_topic_dlq_handler(_msg: String) -> Result<(), Error> {
     info!("Received message from DLQ: {:?}", _msg);
-    FAILED_COUNT.fetch_add(1, Ordering::SeqCst);
+    DLQ_ACTIVATION_COUNT.fetch_add(1, Ordering::SeqCst);
     Ok(())
+}
+
+#[kafka_listener(
+    topic = "testing-errors",
+    listener_id = "erroring-listener",
+    yaml_path = "test-kafka.yaml",
+    deserializer = "string_deserializer",
+    retry_max_attempts = 5,
+    retry_initial_backoff = 100,
+    retry_max_backoff = 10000,
+    retry_multiplier = 2.0
+)]
+fn erroring_handler(_msg: String) -> Result<(), Error> {
+    info!("Received erroring msg: {:?}", _msg);
+    FAILED_COUNT.fetch_add(1, Ordering::SeqCst);
+    Err(Error::ProcessingFailed("test".to_string()))
 }
 
 fn get_state_for_id(id: u32) -> Option<TestMessage> {
@@ -129,10 +146,10 @@ async fn test_failing_listener() {
     let container_info = get_kafka_container().await;
     let producer = create_producer(&container_info.bootstrap_servers);
 
-    FAILED_COUNT.store(0, Ordering::SeqCst);
+    DLQ_ACTIVATION_COUNT.store(0, Ordering::SeqCst);
     let listener1 = test_handler_listener().expect("Failed to create test listener");
     listener1.start();
-    let listener2 = failing_handler_listener().expect("Failed to create DLQ listener");
+    let listener2 = test_topic_dlq_handler_listener().expect("Failed to create DLQ listener");
     listener2.start();
 
     let actual_json_msg = "{\"id\":\"will fail as it is not a number\",\"content\":\"test message 0\"}";
@@ -148,9 +165,40 @@ async fn test_failing_listener() {
 
     sleep(Duration::from_secs(10)).await;
     assert_eq!(
-        FAILED_COUNT.load(Ordering::SeqCst),
+        DLQ_ACTIVATION_COUNT.load(Ordering::SeqCst),
         1,
         "DLQ test failed"
     );
     info!("DLQ test completed!! 🚀");
+}
+
+#[tokio::test]
+async fn test_erroring_listener() {
+    log_setup();
+
+    let container_info = get_kafka_container().await;
+    let producer = create_producer(&container_info.bootstrap_servers);
+
+    FAILED_COUNT.store(0, Ordering::SeqCst);
+    let erroring_listener = erroring_handler_listener().expect("Failed to create DLQ listener");
+    erroring_listener.start();
+
+    let actual_json_msg = "{\"id\":\"will fail as it is not a number\",\"content\":\"test message 0\"}";
+    info!("Sending broken message: {:?}", actual_json_msg);
+    producer.send(
+        FutureRecord::to("testing-errors")
+            .payload(actual_json_msg)
+            .key("1"),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("Failed to send message");  
+
+    sleep(Duration::from_secs(10)).await;
+    assert_eq!(
+        FAILED_COUNT.load(Ordering::SeqCst),
+        5,
+        "Erroring listener test failed"
+    );
+    info!("Erroring listener test completed!! 🚀");
 }
