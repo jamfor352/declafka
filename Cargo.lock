@@ -661,35 +661,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "declafka_lib"
-version = "0.1.0"
-source = "git+https://github.com/jamfor352/declafka?tag=v0.0.2-alpha#91cfb4c765de0794bff8ee2d13f74c27cc50abd9"
-dependencies = [
- "chrono",
- "log",
- "rdkafka",
- "serde",
- "serde_json",
- "serde_yaml",
- "tokio",
-]
-
-[[package]]
 name = "declafka_macro"
 version = "0.1.0"
 dependencies = [
- "declafka_lib 0.1.0",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "declafka_macro"
-version = "0.1.0"
-source = "git+https://github.com/jamfor352/declafka?tag=v0.0.2-alpha#91cfb4c765de0794bff8ee2d13f74c27cc50abd9"
-dependencies = [
- "declafka_lib 0.1.0 (git+https://github.com/jamfor352/declafka?tag=v0.0.2-alpha)",
+ "declafka_lib",
  "proc-macro2",
  "quote",
  "syn",
@@ -821,8 +796,8 @@ version = "0.1.0"
 dependencies = [
  "actix-service",
  "actix-web",
- "declafka_lib 0.1.0 (git+https://github.com/jamfor352/declafka?tag=v0.0.2-alpha)",
- "declafka_macro 0.1.0 (git+https://github.com/jamfor352/declafka?tag=v0.0.2-alpha)",
+ "declafka_lib",
+ "declafka_macro",
  "env_logger",
  "jsonwebtoken",
  "log",
@@ -1400,8 +1375,8 @@ dependencies = [
 name = "integration_tests"
 version = "0.1.0"
 dependencies = [
- "declafka_lib 0.1.0",
- "declafka_macro 0.1.0",
+ "declafka_lib",
+ "declafka_macro",
  "env_logger",
  "lazy_static",
  "log",

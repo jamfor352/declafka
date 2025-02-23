@@ -11,9 +11,12 @@ jsonwebtoken = "9.3.1"
 env_logger = "0.11.6"
 serde_json = "1.0.138"
 
-# Bring in the library and macros from our repo. Note: Just specifying v0.0.2-alpha at time of writing - use the latest tag from the repo.
-declafka_lib = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.2-alpha" }
-declafka_macro = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.2-alpha" }
+# Bring in the library and macros.
+declafka_lib = { path = "../declafka_lib" }
+declafka_macro = { path = "../declafka_macro" }
+# NOTE: A real application separate from this example app would use the following dependencies.
+# declafka_lib = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.2-alpha" }
+# declafka_macro = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.2-alpha" }
 log = "0.4.25"
 tokio = { version = "1.0.0", features = ["rt", "rt-multi-thread", "macros"] }
 

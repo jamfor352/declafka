@@ -14,135 +14,44 @@ pub struct KafkaConfig {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ListenerConfig {
-    #[serde(default = "default_bootstrap_servers")]
-    #[serde(rename = "bootstrap.servers")]
-    bootstrap_servers: String,
-
-    #[serde(default = "default_group_id")]
-    #[serde(rename = "group.id")]
-    group_id: String,
-
-    #[serde(default = "default_auto_offset_reset")]
-    #[serde(rename = "auto.offset.reset")]
-    auto_offset_reset: String,
-
-    #[serde(default = "default_enable_auto_commit")]
-    #[serde(rename = "enable.auto.commit")]
-    enable_auto_commit: String,
-
-    #[serde(default = "default_session_timeout_ms")]
-    #[serde(rename = "session.timeout.ms")]
-    session_timeout_ms: String,
-
-    #[serde(default = "default_heartbeat_interval_ms")]
-    #[serde(rename = "heartbeat.interval.ms")]
-    heartbeat_interval_ms: String,
-
-    #[serde(default = "default_max_poll_interval_ms")]
-    #[serde(rename = "max.poll.interval.ms")]
-    max_poll_interval_ms: String,
-
-    #[serde(default = "default_fetch_max_bytes")]
-    #[serde(rename = "fetch.max.bytes")]
-    fetch_max_bytes: String,
-
-    #[serde(default = "default_security_protocol")]
-    #[serde(rename = "security.protocol")]
-    security_protocol: String,
-
-    #[serde(default)]
-    #[serde(rename = "sasl.mechanism")]
-    sasl_mechanism: Option<String>,
-
-    #[serde(default)]
-    #[serde(rename = "sasl.username")]
-    sasl_username: Option<String>,
-
-    #[serde(default)]
-    #[serde(rename = "sasl.password")]
-    sasl_password: Option<String>,
+    #[serde(flatten)]
+    properties: HashMap<String, String>
 }
-
-// Default functions
-fn default_bootstrap_servers() -> String { "localhost:9092".to_string() }
-fn default_group_id() -> String { "default-group".to_string() }
-fn default_auto_offset_reset() -> String { "earliest".to_string() }
-fn default_enable_auto_commit() -> String { "false".to_string() }
-fn default_session_timeout_ms() -> String { "6000".to_string() }
-fn default_heartbeat_interval_ms() -> String { "3000".to_string() }
-fn default_max_poll_interval_ms() -> String { "300000".to_string() }
-fn default_fetch_max_bytes() -> String { "52428800".to_string() }
-fn default_security_protocol() -> String { "plaintext".to_string() }
 
 impl ListenerConfig {
     /// Applies environment variable overrides for a specific listener.
     fn apply_env_overrides(&mut self, listener_id: &str) {
-        let apply = |field: &mut String, key: &str| {
+        // Process all environment variables that start with KAFKA_
+        for (key, value) in env::vars() {
             let upper_id = listener_id.to_uppercase();
-            let listener_key_underscore = format!("KAFKA_{}_{}", upper_id.replace('-', "_"), key);
-            let listener_key_hyphen = format!("KAFKA_{}_{}", upper_id, key);
-            let global_key = format!("KAFKA_GLOBAL_{}", key);
+            let listener_prefix_underscore = format!("KAFKA_{}_{}", upper_id.replace('-', "_"), "");
+            let listener_prefix_hyphen = format!("KAFKA_{}_{}", upper_id, "");
+            let global_prefix = "KAFKA_GLOBAL_";
 
-            if let Ok(value) = env::var(&listener_key_underscore) {
-                *field = value;
-            } else if let Ok(value) = env::var(&listener_key_hyphen) {
-                *field = value;
-            } else if let Ok(value) = env::var(&global_key) {
-                *field = value;
+            // Check if this env var is for our listener or global
+            if let Some(kafka_key) = if key.starts_with(&listener_prefix_underscore) {
+                Some(key[listener_prefix_underscore.len()..].to_string())
+            } else if key.starts_with(&listener_prefix_hyphen) {
+                Some(key[listener_prefix_hyphen.len()..].to_string())
+            } else if key.starts_with(global_prefix) {
+                Some(key[global_prefix.len()..].to_string())
+            } else {
+                None
+            } {
+                // Convert back to Kafka property format
+                let kafka_key = kafka_key.to_lowercase().replace('_', ".");
+                self.properties.insert(kafka_key, value); 
             }
-        };
-
-        let apply_option = |field: &mut Option<String>, key: &str| {
-            let upper_id = listener_id.to_uppercase();
-            let listener_key_underscore = format!("KAFKA_{}_{}", upper_id.replace('-', "_"), key);
-            let listener_key_hyphen = format!("KAFKA_{}_{}", upper_id, key);
-            let global_key = format!("KAFKA_GLOBAL_{}", key);
-
-            if let Ok(value) = env::var(&listener_key_underscore) {
-                *field = Some(value);
-            } else if let Ok(value) = env::var(&listener_key_hyphen) {
-                *field = Some(value);
-            } else if let Ok(value) = env::var(&global_key) {
-                *field = Some(value);
-            }
-        };
-
-        apply(&mut self.bootstrap_servers, "BOOTSTRAP_SERVERS");
-        apply(&mut self.group_id, "GROUP_ID");
-        apply(&mut self.auto_offset_reset, "AUTO_OFFSET_RESET");
-        apply(&mut self.enable_auto_commit, "ENABLE_AUTO_COMMIT");
-        apply(&mut self.session_timeout_ms, "SESSION_TIMEOUT_MS");
-        apply(&mut self.heartbeat_interval_ms, "HEARTBEAT_INTERVAL_MS");
-        apply(&mut self.max_poll_interval_ms, "MAX_POLL_INTERVAL_MS");
-        apply(&mut self.fetch_max_bytes, "FETCH_MAX_BYTES");
-        apply(&mut self.security_protocol, "SECURITY_PROTOCOL");
-        apply_option(&mut self.sasl_mechanism, "SASL_MECHANISM");
-        apply_option(&mut self.sasl_username, "SASL_USERNAME");
-        apply_option(&mut self.sasl_password, "SASL_PASSWORD");
+        }
     }
 
     /// Converts the listener config into a ClientConfig for rdkafka.
     pub fn to_client_config(&self) -> ClientConfig {
         let mut config = ClientConfig::new();
-        config
-            .set("bootstrap.servers", &self.bootstrap_servers)
-            .set("group.id", &self.group_id)
-            .set("auto.offset.reset", &self.auto_offset_reset)
-            .set("enable.auto.commit", &self.enable_auto_commit)
-            .set("session.timeout.ms", &self.session_timeout_ms)
-            .set("heartbeat.interval.ms", &self.heartbeat_interval_ms)
-            .set("max.poll.interval.ms", &self.max_poll_interval_ms)
-            .set("fetch.max.bytes", &self.fetch_max_bytes)
-            .set("security.protocol", &self.security_protocol);
-
-        if let Some(mechanism) = &self.sasl_mechanism {
-            config.set("sasl.mechanism", mechanism);
-        }
-        if let Some(username) = &self.sasl_username {
-            config.set("sasl.username", username);
-        }
-        if let Some(password) = &self.sasl_password {
-            config.set("sasl.password", password);
+        
+        // Apply all properties
+        for (key, value) in &self.properties {
+            config.set(key, value);
         }
 
         config
@@ -150,42 +59,9 @@ impl ListenerConfig {
 
     /// Merges default config into this config, keeping existing values
     fn merge_defaults(&mut self, defaults: &ListenerConfig) {
-        // Only override fields that aren't explicitly set (using default values)
-        if self.bootstrap_servers == default_bootstrap_servers() {
-            self.bootstrap_servers = defaults.bootstrap_servers.clone();
-        }
-        if self.group_id == default_group_id() {
-            self.group_id = defaults.group_id.clone();
-        }
-        if self.auto_offset_reset == default_auto_offset_reset() {
-            self.auto_offset_reset = defaults.auto_offset_reset.clone();
-        }
-        if self.enable_auto_commit == default_enable_auto_commit() {
-            self.enable_auto_commit = defaults.enable_auto_commit.clone();
-        }
-        if self.session_timeout_ms == default_session_timeout_ms() {
-            self.session_timeout_ms = defaults.session_timeout_ms.clone();
-        }
-        if self.heartbeat_interval_ms == default_heartbeat_interval_ms() {
-            self.heartbeat_interval_ms = defaults.heartbeat_interval_ms.clone();
-        }
-        if self.max_poll_interval_ms == default_max_poll_interval_ms() {
-            self.max_poll_interval_ms = defaults.max_poll_interval_ms.clone();
-        }
-        if self.fetch_max_bytes == default_fetch_max_bytes() {
-            self.fetch_max_bytes = defaults.fetch_max_bytes.clone();
-        }
-        if self.security_protocol == default_security_protocol() {
-            self.security_protocol = defaults.security_protocol.clone();
-        }
-        if self.sasl_mechanism.is_none() && defaults.sasl_mechanism.is_some() {
-            self.sasl_mechanism = defaults.sasl_mechanism.clone();
-        }
-        if self.sasl_username.is_none() && defaults.sasl_username.is_some() {
-            self.sasl_username = defaults.sasl_username.clone();
-        }
-        if self.sasl_password.is_none() && defaults.sasl_password.is_some() {
-            self.sasl_password = defaults.sasl_password.clone();
+        // Merge all properties from defaults that don't exist in self
+        for (key, value) in &defaults.properties {
+            self.properties.entry(key.clone()).or_insert_with(|| value.clone());
         }
     }
 }
@@ -208,10 +84,11 @@ pub fn load_config(yaml_path: &str, listener_id: &str) -> Result<ClientConfig, B
     // Apply environment variable overrides (after defaults)
     listener_config.apply_env_overrides(listener_id);
 
+    let actual_client_config = listener_config.to_client_config();
     info!("Loaded config for listener: {}", listener_id);
-    info!("Config: {:?}", listener_config);
+    info!("Config for listener: {}: {:?}", listener_id, actual_client_config);
 
-    Ok(listener_config.to_client_config())
+    Ok(actual_client_config)
 }
 
 #[cfg(test)]
