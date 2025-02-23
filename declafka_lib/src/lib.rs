@@ -379,27 +379,24 @@ where
         })
     }
 
-    pub fn start(self) {
-        tokio::spawn(async move {
-            wait_for_shutdown().await;
-            info!("Shutdown signal received, notifying Kafka consumer...");
-        });
+    pub fn start(self) -> tokio::sync::watch::Sender<bool> {
         let listener = Arc::new(self);
-        let _ = listener.clone(); // Unused clone.
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let shutdown_tx_clone = shutdown_tx.clone();
         tokio::spawn(async move {
             if let Err(e) = listener.consumer.subscribe(&vec![listener.topic.clone()]).await {
                 warn!("Failed to subscribe: {:?}", e);
             }
             listener.is_running.store(true, Ordering::SeqCst);
             info!("Kafka listener started for topic: {}", listener.topic);
-            let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+            
             let _ = listener.clone();
             tokio::spawn(async move {
                 wait_for_shutdown().await;
                 info!("Shutdown signal received, notifying Kafka consumers...");
-                let _ = shutdown_tx.send(true);
+                let _ = shutdown_tx_clone.send(true);
             });
-            'main: while listener.is_running.load(Ordering::SeqCst) {
+            while listener.is_running.load(Ordering::SeqCst) {
                 tokio::select! {
                     result = listener.consumer.recv() => {
                         match result {
@@ -423,24 +420,25 @@ where
                             }
                         }
                     },
-                    _ = shutdown_rx.changed() => {
-                        warn!("Kafka listener shutting down gracefully...");
-                        let tracker_snapshot: Vec<(String, i32, i64)> = {
-                            let tracker = listener.offset_tracker.lock().unwrap();
-                            tracker.iter().map(|((topic, partition), &offset)| (topic.clone(), *partition, offset)).collect()
-                        };
-                        for (topic, partition, offset) in tracker_snapshot {
-                            if let Err(e) = listener.consumer.commit(&topic, partition, offset).await {
-                                warn!("Failed to commit offset during shutdown: {:?}", e);
-                            }
-                        }
+                    Ok(()) = shutdown_rx.changed() => {
                         listener.is_running.store(false, Ordering::SeqCst);
-                        break 'main;
+                        warn!("Shutdown requested");
                     }
+                }
+            }
+            warn!("Kafka listener shutting down gracefully...");
+            let tracker_snapshot: Vec<(String, i32, i64)> = {
+                let tracker = listener.offset_tracker.lock().unwrap();
+                tracker.iter().map(|((topic, partition), &offset)| (topic.clone(), *partition, offset)).collect()
+            };
+            for (topic, partition, offset) in tracker_snapshot {
+                if let Err(e) = listener.consumer.commit(&topic, partition, offset).await {
+                    warn!("Failed to commit offset during shutdown: {:?}", e);
                 }
             }
             info!("Kafka listener for topic '{}' has stopped.", listener.topic);
         });
+        shutdown_tx
     }
 
     pub fn get_health_check(&self) -> HealthCheck {
@@ -571,7 +569,7 @@ where
     T: DeserializeOwned + Send + Clone + 'static,
     C: KafkaConsumer + DLQProducerFactory + Send + Sync + 'static,
 {
-    /// Builder method that configures the DLQ by using the consumer’s default DLQ producer.
+    /// Builder method that configures the DLQ by using the consumer's default DLQ producer.
     pub fn with_dead_letter_queue(mut self, dlq_topic: &str) -> Self {
         self.dlq_topic = Some(dlq_topic.to_string());
         self.dead_letter_producer = Some(C::default_dlq_producer(&self.yaml_path, &self.listener_id));

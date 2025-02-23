@@ -105,7 +105,7 @@ async fn test_kafka_functionality() {
     PROCESSED_COUNT.store(0, Ordering::SeqCst);
 
     let listener = test_handler_listener().expect("Failed to create test listener");
-    listener.start();
+    let shutdown_tx = listener.start();
 
     for i in 0..5 {
         let test_msg = TestMessage {
@@ -137,6 +137,10 @@ async fn test_kafka_functionality() {
         );
     }
     info!("Basic message test completed!! 🚀");
+
+    // Send shutdown signal and wait a bit to ensure it's processed
+    shutdown_tx.send(true).unwrap();
+    sleep(Duration::from_secs(2)).await;  // Add small delay to ensure shutdown completes
 }
 
 #[tokio::test]
@@ -148,9 +152,9 @@ async fn test_failing_listener() {
 
     DLQ_ACTIVATION_COUNT.store(0, Ordering::SeqCst);
     let listener1 = test_handler_listener().expect("Failed to create test listener");
-    listener1.start();
+    let shutdown_tx = listener1.start();
     let listener2 = test_topic_dlq_handler_listener().expect("Failed to create DLQ listener");
-    listener2.start();
+    let shutdown_tx2 = listener2.start();
 
     let actual_json_msg = "{\"id\":\"will fail as it is not a number\",\"content\":\"test message 0\"}";
     info!("Sending broken message: {:?}", actual_json_msg);
@@ -170,6 +174,11 @@ async fn test_failing_listener() {
         "DLQ test failed"
     );
     info!("DLQ test completed!! 🚀");
+
+    // Send shutdown signals and wait a bit to ensure it's processed
+    shutdown_tx.send(true).unwrap();
+    shutdown_tx2.send(true).unwrap();
+    sleep(Duration::from_secs(2)).await;  // Add small delay to ensure shutdown completes
 }
 
 #[tokio::test]
@@ -181,7 +190,7 @@ async fn test_erroring_listener() {
 
     FAILED_COUNT.store(0, Ordering::SeqCst);
     let erroring_listener = erroring_handler_listener().expect("Failed to create DLQ listener");
-    erroring_listener.start();
+    let shutdown_tx = erroring_listener.start();
 
     let actual_json_msg = "{\"id\":\"will fail as it is not a number\",\"content\":\"test message 0\"}";
     info!("Sending broken message: {:?}", actual_json_msg);
@@ -201,4 +210,8 @@ async fn test_erroring_listener() {
         "Erroring listener test failed"
     );
     info!("Erroring listener test completed!! 🚀");
+    
+    // Send shutdown signal and wait a bit to ensure it's processed
+    shutdown_tx.send(true).unwrap();
+    sleep(Duration::from_secs(2)).await;  // Add small delay to ensure shutdown completes
 }
