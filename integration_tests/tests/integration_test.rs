@@ -99,8 +99,8 @@ fn get_state_for_id(id: u32) -> Option<TestMessage> {
 async fn test_kafka_functionality() {
     log_setup();
 
-    let container_info = get_kafka_container().await;
-    let producer = create_producer(&container_info.bootstrap_servers);
+    let _container_info = get_kafka_container().await;
+    let producer = create_producer();
 
     PROCESSED_COUNT.store(0, Ordering::SeqCst);
 
@@ -147,8 +147,8 @@ async fn test_kafka_functionality() {
 async fn test_failing_listener() {
     log_setup();
 
-    let container_info = get_kafka_container().await;
-    let producer = create_producer(&container_info.bootstrap_servers);
+    let _container_info = get_kafka_container().await;
+    let producer = create_producer();
 
     DLQ_ACTIVATION_COUNT.store(0, Ordering::SeqCst);
     let listener1 = test_handler_listener().expect("Failed to create test listener");
@@ -185,8 +185,8 @@ async fn test_failing_listener() {
 async fn test_erroring_listener() {
     log_setup();
 
-    let container_info = get_kafka_container().await;
-    let producer = create_producer(&container_info.bootstrap_servers);
+    let _container_info = get_kafka_container().await;
+    let producer = create_producer();
 
     FAILED_COUNT.store(0, Ordering::SeqCst);
     let erroring_listener = erroring_handler_listener().expect("Failed to create DLQ listener");

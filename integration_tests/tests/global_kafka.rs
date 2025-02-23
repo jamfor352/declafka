@@ -27,7 +27,6 @@ lazy_static! {
 // Container info struct.
 pub struct KafkaContainerInfo {
     pub _container: ContainerAsync<GenericImage>,
-    pub bootstrap_servers: String,
 }
 
 /// Creates the Kafka container and sets it up. This function is only called
@@ -56,13 +55,6 @@ pub async fn create_kafka_container_delegate() -> KafkaContainerInfo {
         .await
         .expect("Failed to start Kafka");
 
-    let host_port = container
-        .get_host_port_ipv4(mapped_port)
-        .await
-        .expect("Failed to get port");
-    let bootstrap_servers = format!("127.0.0.1:{}", host_port);
-
-
     // Create topics.
     let topics = ["test-topic", "test-topic-dlq"];
     for topic in topics.iter() {
@@ -83,7 +75,6 @@ pub async fn create_kafka_container_delegate() -> KafkaContainerInfo {
     info!("Kafka setup complete");
     KafkaContainerInfo {
         _container:container,
-        bootstrap_servers,
     }
 }
 
@@ -103,10 +94,9 @@ pub async fn get_kafka_container() -> Arc<KafkaContainerInfo> {
 }
 
 // Helper to create a Kafka producer.
-pub fn create_producer(bootstrap_servers: &str) -> FutureProducer {
-    info!("Creating producer with bootstrap servers: {}", bootstrap_servers);
+pub fn create_producer() -> FutureProducer {
     rdkafka::ClientConfig::new()
-        .set("bootstrap.servers", bootstrap_servers)
+        .set("bootstrap.servers", "localhost:19092")
         .set("message.timeout.ms", "5000")
         .set("debug", "all")  // Add debug logging if needed.
         .create()
