@@ -12,6 +12,7 @@ all: test
 .PHONY: build
 build:
 	docker build -t $(IMAGE_NAME) -f $(DOCKERFILE) .
+	cargo build --workspace
 
 # Run tests
 .PHONY: test
@@ -22,6 +23,7 @@ test: build
 .PHONY: clean
 clean:
 	docker rmi $(IMAGE_NAME) || true
+	cargo clean
 
 # Run the example app
 .PHONY: run

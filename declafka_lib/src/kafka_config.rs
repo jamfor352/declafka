@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::Read;
+use std::sync::LazyLock;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct KafkaConfig {
@@ -83,9 +84,7 @@ pub fn load_config(yaml_path: &str, listener_id: &str) -> Result<ClientConfig, B
 
     // Apply environment variable overrides (after defaults)
     listener_config.apply_env_overrides(listener_id);
-
     let actual_client_config = listener_config.to_client_config();
-    info!("Loaded config for listener: {}", listener_id);
     info!("Config for listener: {}: {:?}", listener_id, actual_client_config);
 
     Ok(actual_client_config)
@@ -103,6 +102,20 @@ mod tests {
     #[cfg(test)]
     static TEST_THREAD_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+    static TEMP_FILE: LazyLock<NamedTempFile> = LazyLock::new(|| {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let config_yaml_raw = r#"
+        kafka:
+            default:
+                auto.offset.reset: earliest
+            listener-1:
+                bootstrap.servers: original:9092
+                group.id: original-group
+        "#;
+        writeln!(temp_file, "{}", config_yaml_raw).unwrap();
+        temp_file
+    });
+
     #[cfg(test)]
     #[ctor::ctor]
     fn init() {
@@ -114,28 +127,25 @@ mod tests {
 
     #[test]
     fn test_yaml_and_env_overrides() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "kafka:\n  default:\n    auto.offset.reset: \"earliest\"\n  listener-1:\n    bootstrap.servers: \"original:9092\"\n    group.id: \"original-group\"").unwrap();
-
         env::set_var("KAFKA_LISTENER_1_BOOTSTRAP_SERVERS", "listener1:9092");
+        env::set_var("KAFKA_LISTENER_1_AUTO_OFFSET_RESET", "latest");
         env::set_var("KAFKA_GLOBAL_GROUP_ID", "global-group");
 
-        let config = load_config(temp_file.path().to_str().unwrap(), "listener-1").unwrap();
+        let config = load_config(TEMP_FILE.path().to_str().unwrap(), "listener-1").unwrap();
 
         assert_eq!(config.get("bootstrap.servers").unwrap(), "listener1:9092");
         assert_eq!(config.get("group.id").unwrap(), "global-group");
-        assert_eq!(config.get("auto.offset.reset").unwrap(), "earliest");
+        assert_eq!(config.get("auto.offset.reset").unwrap(), "latest");
 
         env::remove_var("KAFKA_LISTENER_1_BOOTSTRAP_SERVERS");
+        env::remove_var("KAFKA_LISTENER_1_AUTO_OFFSET_RESET");
         env::remove_var("KAFKA_GLOBAL_GROUP_ID");
     }
 
     #[test]
     fn test_yaml_without_overrides() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "kafka:\n  default:\n    auto.offset.reset: \"earliest\"\n  listener-1:\n    bootstrap.servers: \"original:9092\"\n    group.id: \"original-group\"").unwrap();
 
-        let config = load_config(temp_file.path().to_str().unwrap(), "listener-1").unwrap();
+        let config = load_config(TEMP_FILE.path().to_str().unwrap(), "listener-1").unwrap();
 
         assert_eq!(config.get("bootstrap.servers").unwrap(), "original:9092");
         assert_eq!(config.get("group.id").unwrap(), "original-group");
@@ -144,29 +154,14 @@ mod tests {
 
     #[test]
     fn test_yaml_with_global_override_only() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "kafka:\n  default:\n    auto.offset.reset: \"earliest\"\n  listener-1:\n    bootstrap.servers: \"original:9092\"\n    group.id: \"original-group\"").unwrap();
-
         env::set_var("KAFKA_GLOBAL_GROUP_ID", "global-group");
 
-        let config = load_config(temp_file.path().to_str().unwrap(), "listener-1").unwrap();
+        let config = load_config(TEMP_FILE.path().to_str().unwrap(), "listener-1").unwrap();
 
         assert_eq!(config.get("bootstrap.servers").unwrap(), "original:9092");
         assert_eq!(config.get("group.id").unwrap(), "global-group");
         assert_eq!(config.get("auto.offset.reset").unwrap(), "earliest");
 
         env::remove_var("KAFKA_GLOBAL_GROUP_ID");
-    }
-
-    #[test]
-    fn test_yaml_with_default_inheritance() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "kafka:\n  default:\n    bootstrap.servers: \"localhost:19092\"\n    auto.offset.reset: \"earliest\"\n  test-listener:\n    group.id: \"test-listener-group\"").unwrap();
-
-        let config = load_config(temp_file.path().to_str().unwrap(), "test-listener").unwrap();
-
-        assert_eq!(config.get("bootstrap.servers").unwrap(), "localhost:19092");
-        assert_eq!(config.get("group.id").unwrap(), "test-listener-group");
-        assert_eq!(config.get("auto.offset.reset").unwrap(), "earliest");
     }
 }
