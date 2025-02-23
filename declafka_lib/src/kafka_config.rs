@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn test_yaml_and_env_overrides() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "kafka:\n  listener-1:\n    bootstrap.servers: \"original:9092\"\n    group.id: \"original-group\"").unwrap();
+        writeln!(temp_file, "kafka:\n  default:\n    auto.offset.reset: \"earliest\"\n  listener-1:\n    bootstrap.servers: \"original:9092\"\n    group.id: \"original-group\"").unwrap();
 
         env::set_var("KAFKA_LISTENER_1_BOOTSTRAP_SERVERS", "listener1:9092");
         env::set_var("KAFKA_GLOBAL_GROUP_ID", "global-group");
@@ -133,7 +133,7 @@ mod tests {
     #[test]
     fn test_yaml_without_overrides() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "kafka:\n  listener-1:\n    bootstrap.servers: \"original:9092\"\n    group.id: \"original-group\"").unwrap();
+        writeln!(temp_file, "kafka:\n  default:\n    auto.offset.reset: \"earliest\"\n  listener-1:\n    bootstrap.servers: \"original:9092\"\n    group.id: \"original-group\"").unwrap();
 
         let config = load_config(temp_file.path().to_str().unwrap(), "listener-1").unwrap();
 
@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn test_yaml_with_global_override_only() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "kafka:\n  listener-1:\n    bootstrap.servers: \"original:9092\"\n    group.id: \"original-group\"").unwrap();
+        writeln!(temp_file, "kafka:\n  default:\n    auto.offset.reset: \"earliest\"\n  listener-1:\n    bootstrap.servers: \"original:9092\"\n    group.id: \"original-group\"").unwrap();
 
         env::set_var("KAFKA_GLOBAL_GROUP_ID", "global-group");
 
