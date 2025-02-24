@@ -4,6 +4,7 @@ use example_app::routes::routes::app;
 use serde_json::json;
 
 
+// With Actix Web, HTTP server:
 #[declafka_macro::begin_listeners(
     listeners = [
         handle_normal_string_listener, 
@@ -32,26 +33,17 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-/*
-If you don't want to run a HTTP server, you can do something like:
 
-#[declafka_macro::begin_listeners(
-    listeners = [
-        handle_normal_string_listener, 
-        handle_my_struct_listener
-    ]
-)]
-#[tokio::main]
-async fn main() -> std::io::Result<()> {
-    // init logs
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-
-    // Fire-and-forget style: start() spawns tasks
-    handle_normal_string_listener().start();
-    handle_my_struct_listener().start();
-
-    // Keep main alive by some means, or let it exit if that's what you want
-    tokio::signal::ctrl_c().await?;
-    Ok(())
-}
- */
+// With Tokio, no web server:
+// #[declafka_macro::begin_listeners(
+//     listeners = [
+//         handle_normal_string_listener, 
+//         handle_my_struct_listener
+//     ]
+// )]
+// #[tokio::main]
+// async fn main() -> std::io::Result<()> {
+//     // Keep main alive by some means, or let it exit if that's what you want
+//     tokio::signal::ctrl_c().await?;
+//     Ok(())
+// }
