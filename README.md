@@ -124,8 +124,8 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-declafka_lib = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.3-alpha" }
-declafka_macro = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.3-alpha" }
+declafka_lib = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.4-alpha" }
+declafka_macro = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.4-alpha" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ```
