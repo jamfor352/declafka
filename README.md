@@ -252,23 +252,6 @@ fn handle_message(msg: MyMessage) -> Result<(), declafka_lib::Error>
     Ok(())
 ```
 
-### Web Integration (e.g., Actix)
-Run alongside a web server:
-
-```rust
-use actix_web::{App, HttpServer}
-
-#[actix_web::main]
-async fn main() -> std::io::Result<()>
-    let listener = handle_message_listener()
-        .expect("Failed to initialize listener")
-    listener.start()
-    HttpServer::new(|| App::new())
-        .bind("127.0.0.1:8080")?
-        .run()
-        .await
-```
-
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE). See the file for details.
