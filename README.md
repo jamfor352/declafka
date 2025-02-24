@@ -156,7 +156,7 @@ fn handle_message(msg: MyMessage) -> Result<(), declafka_lib::Error>
     println!("Got message: {}", msg.field1)
     Ok(())
 
-#[declafka_macro::begin_listeners(
+#[begin_listeners(
      listeners = [handle_message_listener]
 )]
 #[tokio::main]
