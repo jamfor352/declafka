@@ -15,8 +15,8 @@ serde_json = "1.0.138"
 declafka_lib = { path = "../declafka_lib" }
 declafka_macro = { path = "../declafka_macro" }
 # NOTE: A real application separate from this example app would use the following dependencies.
-# declafka_lib = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.2-alpha" }
-# declafka_macro = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.2-alpha" }
+# declafka_lib = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.4-alpha" }
+# declafka_macro = { git = "https://github.com/jamfor352/declafka", tag = "v0.0.4-alpha" }
 log = "0.4.25"
 tokio = { version = "1.0.0", features = ["rt", "rt-multi-thread", "macros"] }
 
