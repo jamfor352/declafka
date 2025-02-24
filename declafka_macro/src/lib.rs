@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{quote, format_ident};
 use syn::{
     parse_macro_input, ItemFn, Meta, Expr, ExprLit, Lit,
     punctuated::Punctuated, token::Comma,
@@ -141,6 +141,41 @@ impl KafkaListenerArgs {
     }
 }
 
+/// Represents the parsed begin_listeners attributes.
+struct BeginListenersArgs {
+    listeners: Vec<Path>,
+}
+
+impl BeginListenersArgs {
+    fn from_meta_list(meta_list: MetaList) -> syn::Result<Self> {
+        let mut listeners = Vec::new();
+
+        for meta in meta_list.0 {
+            if let Meta::NameValue(nv) = meta {
+                let name = nv.path.get_ident()
+                    .ok_or_else(|| syn::Error::new_spanned(&nv.path, "Expected identifier"))?
+                    .to_string();
+                
+                if name == "listeners" {
+                    if let syn::Expr::Array(array) = &nv.value {
+                        listeners = array.elems.iter()
+                            .filter_map(|elem| {
+                                if let syn::Expr::Path(path) = elem {
+                                    Some(path.path.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                    }
+                }
+            }
+        }
+
+        Ok(BeginListenersArgs { listeners })
+    }
+}
+
 #[proc_macro_attribute]
 pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
     // Parse the input function and attributes.
@@ -230,4 +265,44 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     expanded.into()
+}
+
+#[proc_macro_attribute]
+pub fn begin_listeners(attrs: TokenStream, item: TokenStream) -> TokenStream {
+    let mut input_fn = parse_macro_input!(item as ItemFn);
+    // Ensure we're dealing with an async function.
+    if input_fn.sig.asyncness.is_none() {
+        return syn::Error::new_spanned(
+            &input_fn.sig,
+            "begin_listeners must be applied to an async function (place it above #[actix_web::main] or #[tokio::main])"
+        )
+        .to_compile_error()
+        .into();
+    }
+    
+    let meta_list = parse_macro_input!(attrs as MetaList);
+    let args = match BeginListenersArgs::from_meta_list(meta_list) {
+        Ok(a) => a,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    
+    let listener_setups = args.listeners.iter().enumerate().map(|(i, listener)| {
+        let listener_name = format_ident!("listener_{}", i);
+        quote! {
+            let #listener_name = #listener().expect("Failed to create listener");
+            #listener_name.start();
+        }
+    });
+    
+    // Replace the function body with one that injects our code at the very beginning.
+    let orig_block = input_fn.block;
+    input_fn.block = Box::new(syn::parse_quote!({
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .filter_level(log::LevelFilter::Info)
+            .init();
+        ::tokio::spawn(async move { #(#listener_setups)* });
+        #orig_block
+    }));
+    
+    quote!(#input_fn).into()
 }

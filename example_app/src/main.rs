@@ -3,20 +3,15 @@ use example_app::listeners::listeners::{handle_my_struct_listener, handle_normal
 use example_app::routes::routes::app;
 use serde_json::json;
 
+
+#[declafka_macro::begin_listeners(
+    listeners = [
+        handle_normal_string_listener, 
+        handle_my_struct_listener
+    ]
+)]
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // Initialize logging
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .filter_level(log::LevelFilter::Info)
-        .init();
-
-    // Start the Kafka Listeners
-    let string_listener = handle_normal_string_listener().expect("Failed to create string listener");
-    string_listener.start();
-
-    let json_listener = handle_my_struct_listener().expect("Failed to create json listener");
-    json_listener.start();
-
     // Start HTTP server
     HttpServer::new(move || {
         app()
@@ -32,12 +27,20 @@ async fn main() -> std::io::Result<()> {
     })
     .bind("127.0.0.1:8080")?
     .run()
-    .await
+    .await?;
+
+    Ok(())
 }
 
 /*
 If you don't want to run a HTTP server, you can do something like:
 
+#[declafka_macro::begin_listeners(
+    listeners = [
+        handle_normal_string_listener, 
+        handle_my_struct_listener
+    ]
+)]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     // init logs
