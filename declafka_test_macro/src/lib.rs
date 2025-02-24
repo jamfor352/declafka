@@ -37,13 +37,20 @@ impl KafkaTestArgs {
                 
                 match name.as_str() {
                     "topics" => {
-                        if let syn::Expr::Lit(expr_lit) = &nv.value {
-                            if let Lit::Str(lit_str) = &expr_lit.lit {
-                                topics = lit_str.value()
-                                    .split(',')
-                                    .map(|s| s.trim().to_string())
-                                    .collect();
-                            }
+                        if let syn::Expr::Array(array) = &nv.value {
+                            topics = array.elems.iter()
+                                .filter_map(|elem| {
+                                    if let syn::Expr::Lit(expr_lit) = elem {
+                                        if let Lit::Str(lit_str) = &expr_lit.lit {
+                                            Some(lit_str.value())
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
                         }
                     },
                     "port" => {
@@ -106,7 +113,6 @@ pub fn kafka_test(attrs: TokenStream, item: TokenStream) -> TokenStream {
             };
             use log::info;
 
-            // Initialize logging only if not already initialized
             env_logger::builder()
                 .format_timestamp_millis()
                 .filter_level(log::LevelFilter::Info)

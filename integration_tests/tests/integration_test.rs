@@ -106,7 +106,7 @@ fn get_state_for_id(id: u32) -> Option<TestMessage> {
 }
 
 #[kafka_test(
-    topics = "test-topic",
+    topics = ["test-topic"],
     port = 29092,
     controller_port = 29093
 )]
@@ -151,7 +151,7 @@ async fn test_kafka_functionality() {
 }
 
 #[kafka_test(
-    topics = "test-topic-2,test-topic-dlq",
+    topics = ["test-topic-2", "test-topic-dlq"],
     port = 39092,
     controller_port = 39093
 )]
@@ -188,7 +188,7 @@ async fn test_failing_listener() {
 }
 
 #[kafka_test(
-    topics = "testing-errors",
+    topics = ["testing-errors"],
     port = 49092,
     controller_port = 49093
 )]
