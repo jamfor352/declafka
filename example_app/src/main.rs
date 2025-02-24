@@ -1,11 +1,12 @@
 use actix_web::{HttpServer, web, HttpResponse};
+use declafka_macro::begin_listeners;
 use example_app::listeners::listeners::{handle_my_struct_listener, handle_normal_string_listener};
 use example_app::routes::routes::app;
 use serde_json::json;
 
 
 // With Actix Web, HTTP server:
-#[declafka_macro::begin_listeners(
+#[begin_listeners(
     listeners = [
         handle_normal_string_listener, 
         handle_my_struct_listener

@@ -134,7 +134,7 @@ serde_json = "1.0"
 Define a message handler:
 
 ```rust
-use declafka_macro::kafka_listener
+use declafka_macro::{kafka_listener, begin_listeners};
 use serde::{Serialize, Deserialize}
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -156,12 +156,25 @@ fn handle_message(msg: MyMessage) -> Result<(), declafka_lib::Error>
     println!("Got message: {}", msg.field1)
     Ok(())
 
+#[declafka_macro::begin_listeners(
+     listeners = [handle_message_listener]
+)]
 #[tokio::main]
-async fn main()
-    let listener = handle_message_listener()
-        .expect("Failed to initialize listener")
-    listener.start()
+async fn main() -> std::io::Result<()> {
     tokio::signal::ctrl_c().await.unwrap()
+    Ok(())
+}
+```
+
+Then make sure you have a `kafka.yaml` file in your project root, and that you have a `my-topic` topic created on your Kafka cluster.
+Example for above:
+
+```yaml
+kafka:
+  default:
+    bootstrap.servers: "localhost:9092"
+  my-listener:
+    group.id: "my-consumer-group"
 ```
 
 ---
