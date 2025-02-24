@@ -176,7 +176,7 @@ The `kafka_test` macro accepts the following parameters:
 - `topics`: Array of topic names to create in the test container
 - `port`: The port to map Kafka to (default: 29092)
 - `controller_port`: The port for Kafka's controller (default: 29093)
-- `listeners`: Array of Kafka listener functions to start during the test
+- `listeners`: Array of Kafka listener functions to start during the test. Note, the listener functions must be annotated with the `#[kafka_listener]` macro, and they are referenced by their constructed function name, ie the listener name ending with the `_listener` suffix, like in the main code.
 
 Example usage:
 
