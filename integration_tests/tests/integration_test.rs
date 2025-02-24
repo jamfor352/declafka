@@ -108,12 +108,11 @@ fn get_state_for_id(id: u32) -> Option<TestMessage> {
 #[kafka_test(
     topics = ["test-topic"],
     port = 29092,
-    controller_port = 29093
+    controller_port = 29093,
+    listeners = [test_handler_listener]
 )]
 async fn test_kafka_functionality() {
-
-    let listener = test_handler_listener().expect("Failed to create test listener");
-    let shutdown_tx = listener.start();
+    PROCESSED_COUNT.store(0, Ordering::SeqCst);
 
     for i in 0..5 {
         let test_msg = TestMessage {
@@ -145,23 +144,16 @@ async fn test_kafka_functionality() {
         );
     }
     info!("Basic message test completed!! 🚀");
-
-    shutdown_tx.send(true).unwrap();
-    sleep(Duration::from_secs(2)).await;
 }
 
 #[kafka_test(
     topics = ["test-topic-2", "test-topic-dlq"],
     port = 39092,
-    controller_port = 39093
+    controller_port = 39093,
+    listeners = [test_handler_2_listener, test_topic_dlq_handler_listener]
 )]
 async fn test_failing_listener() {
     DLQ_ACTIVATION_COUNT.store(0, Ordering::SeqCst);
-
-    let listener1 = test_handler_2_listener().expect("Failed to create test listener");
-    let shutdown_tx = listener1.start();
-    let listener2 = test_topic_dlq_handler_listener().expect("Failed to create DLQ listener");
-    let shutdown_tx2 = listener2.start();
 
     let actual_json_msg = "{\"id\":\"will fail as it is not a number\",\"content\":\"test message 0\"}";
     info!("Sending broken message: {:?}", actual_json_msg);
@@ -181,25 +173,19 @@ async fn test_failing_listener() {
         "DLQ test failed"
     );
     info!("DLQ test completed!! 🚀");
-
-    shutdown_tx.send(true).unwrap();
-    shutdown_tx2.send(true).unwrap();
-    sleep(Duration::from_secs(2)).await;
 }
 
 #[kafka_test(
     topics = ["testing-errors"],
     port = 49092,
-    controller_port = 49093
+    controller_port = 49093,
+    listeners = [erroring_handler_listener]
 )]
 async fn test_erroring_listener() {
-
-    let erroring_listener = erroring_handler_listener().expect("Failed to create DLQ listener");
-    let shutdown_tx = erroring_listener.start();
+    FAILED_COUNT.store(0, Ordering::SeqCst);
 
     let actual_json_msg = "{\"id\":\"will fail as it is not a number\",\"content\":\"test message 0\"}";
     info!("Sending broken message: {:?}", actual_json_msg);
-    
     producer.send(
         FutureRecord::to("testing-errors")
             .payload(actual_json_msg)
@@ -216,7 +202,4 @@ async fn test_erroring_listener() {
         "Erroring listener test failed"
     );
     info!("Erroring listener test completed!! 🚀");
-    
-    shutdown_tx.send(true).unwrap();
-    sleep(Duration::from_secs(2)).await;
 }

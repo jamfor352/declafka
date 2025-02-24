@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{quote, format_ident};
 use syn::{
     parse_macro_input, ItemFn, Meta, Lit,
     punctuated::Punctuated, token::Comma,
@@ -21,6 +21,7 @@ struct KafkaTestArgs {
     topics: Vec<String>,
     port: u16,
     controller_port: u16,
+    listeners: Vec<syn::Path>,  // Store the listener function paths
 }
 
 impl KafkaTestArgs {
@@ -28,6 +29,7 @@ impl KafkaTestArgs {
         let mut topics = Vec::new();
         let mut port = 29092;
         let mut controller_port = 29093;
+        let mut listeners = Vec::new();
 
         for meta in meta_list.0 {
             if let Meta::NameValue(nv) = meta {
@@ -43,12 +45,19 @@ impl KafkaTestArgs {
                                     if let syn::Expr::Lit(expr_lit) = elem {
                                         if let Lit::Str(lit_str) = &expr_lit.lit {
                                             Some(lit_str.value())
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
+                                        } else { None }
+                                    } else { None }
+                                })
+                                .collect();
+                        }
+                    },
+                    "listeners" => {
+                        if let syn::Expr::Array(array) = &nv.value {
+                            listeners = array.elems.iter()
+                                .filter_map(|elem| {
+                                    if let syn::Expr::Path(path) = elem {
+                                        Some(path.path.clone())
+                                    } else { None }
                                 })
                                 .collect();
                         }
@@ -72,11 +81,7 @@ impl KafkaTestArgs {
             }
         }
 
-        Ok(KafkaTestArgs {
-            topics,
-            port,
-            controller_port,
-        })
+        Ok(KafkaTestArgs { topics, port, controller_port, listeners })
     }
 }
 
@@ -96,6 +101,22 @@ pub fn kafka_test(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let fn_body = &input_fn.block;
 
     let topics_tokens = topics.iter().map(|s| quote!(#s));
+    let listener_setups = args.listeners.iter().enumerate().map(|(i, listener)| {
+        let listener_name = format_ident!("listener_{}", i);
+        let shutdown_name = format_ident!("shutdown_tx_{}", i);
+        quote! {
+            let #listener_name = #listener().expect("Failed to create listener");
+            let #shutdown_name = #listener_name.start();
+        }
+    });
+
+    let shutdown_commands = (0..args.listeners.len()).map(|i| {
+        let shutdown_name = format_ident!("shutdown_tx_{}", i);
+        quote! {
+            #shutdown_name.send(true).unwrap();
+        }
+    });
+
     let expanded = quote! {
         #[tokio::test]
         async fn #fn_name() {
@@ -167,7 +188,15 @@ pub fn kafka_test(attrs: TokenStream, item: TokenStream) -> TokenStream {
 
             info!("Kafka setup complete");
 
+            // Start all listeners
+            #(#listener_setups)*
+
+            // Execute test body
             #fn_body
+
+            // Cleanup
+            #(#shutdown_commands)*
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
     };
 
