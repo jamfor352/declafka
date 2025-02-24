@@ -1,5 +1,3 @@
-use kafka_testcontainer_provider::{create_producer, provision_kafka_container};
-use logging_setup::log_setup;
 use declafka_macro::kafka_listener;
 use declafka_test_macro::kafka_test;
 use rdkafka::producer::FutureRecord;
@@ -11,9 +9,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use lazy_static::lazy_static;
 use log::info;
-
-mod kafka_testcontainer_provider;
-mod logging_setup;
 
 // Static counters and shared state for our handlers.
 lazy_static! {

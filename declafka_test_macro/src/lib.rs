@@ -106,10 +106,13 @@ pub fn kafka_test(attrs: TokenStream, item: TokenStream) -> TokenStream {
             };
             use log::info;
 
+            // Initialize logging only if not already initialized
             env_logger::builder()
                 .format_timestamp_millis()
                 .filter_level(log::LevelFilter::Info)
-                .init();
+                .try_init()
+                .ok();  // Ignore if already initialized
+
             let mapped_port = #port;
             let controller_port = #controller_port;
             let topics = [#(#topics_tokens),*];
