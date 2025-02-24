@@ -1,6 +1,7 @@
 use kafka_testcontainer_provider::{create_producer, provision_kafka_container};
 use logging_setup::log_setup;
 use declafka_macro::kafka_listener;
+use declafka_test_macro::kafka_test;
 use rdkafka::producer::FutureRecord;
 use serde::{Serialize, Deserialize};
 use declafka_lib::Error;
@@ -109,18 +110,12 @@ fn get_state_for_id(id: u32) -> Option<TestMessage> {
     state.get(&id).cloned()
 }
 
-#[tokio::test]
+#[kafka_test(
+    topics = "test-topic",
+    port = 29092,
+    controller_port = 29093
+)]
 async fn test_kafka_functionality() {
-    log_setup();
-
-    let mapped_port = 29092;
-    let controller_port = 29093;
-    let topics = ["test-topic"];
-    
-    let _container_info = provision_kafka_container(mapped_port, controller_port, &topics).await;
-    let producer = create_producer(mapped_port);
-
-    PROCESSED_COUNT.store(0, Ordering::SeqCst);
 
     let listener = test_handler_listener().expect("Failed to create test listener");
     let shutdown_tx = listener.start();
@@ -156,23 +151,18 @@ async fn test_kafka_functionality() {
     }
     info!("Basic message test completed!! 🚀");
 
-    // Send shutdown signal and wait a bit to ensure it's processed
     shutdown_tx.send(true).unwrap();
-    sleep(Duration::from_secs(2)).await;  // Add small delay to ensure shutdown completes
+    sleep(Duration::from_secs(2)).await;
 }
 
-#[tokio::test]
+#[kafka_test(
+    topics = "test-topic-2,test-topic-dlq",
+    port = 39092,
+    controller_port = 39093
+)]
 async fn test_failing_listener() {
-    log_setup();
-
-    let mapped_port = 39092;
-    let controller_port = 39093;
-    let topics = ["test-topic-2", "test-topic-dlq"];
-    
-    let _container_info = provision_kafka_container(mapped_port, controller_port, &topics).await;
-    let producer = create_producer(mapped_port);
-
     DLQ_ACTIVATION_COUNT.store(0, Ordering::SeqCst);
+
     let listener1 = test_handler_2_listener().expect("Failed to create test listener");
     let shutdown_tx = listener1.start();
     let listener2 = test_topic_dlq_handler_listener().expect("Failed to create DLQ listener");
@@ -197,29 +187,24 @@ async fn test_failing_listener() {
     );
     info!("DLQ test completed!! 🚀");
 
-    // Send shutdown signals and wait a bit to ensure it's processed
     shutdown_tx.send(true).unwrap();
     shutdown_tx2.send(true).unwrap();
-    sleep(Duration::from_secs(2)).await;  // Add small delay to ensure shutdown completes
+    sleep(Duration::from_secs(2)).await;
 }
 
-#[tokio::test]
+#[kafka_test(
+    topics = "testing-errors",
+    port = 49092,
+    controller_port = 49093
+)]
 async fn test_erroring_listener() {
-    log_setup();
 
-    let mapped_port = 49092;
-    let controller_port = 49093;
-    let topics = ["testing-errors"];
-    
-    let _container_info = provision_kafka_container(mapped_port, controller_port, &topics).await;
-    let producer = create_producer(mapped_port);
-
-    FAILED_COUNT.store(0, Ordering::SeqCst);
     let erroring_listener = erroring_handler_listener().expect("Failed to create DLQ listener");
     let shutdown_tx = erroring_listener.start();
 
     let actual_json_msg = "{\"id\":\"will fail as it is not a number\",\"content\":\"test message 0\"}";
     info!("Sending broken message: {:?}", actual_json_msg);
+    
     producer.send(
         FutureRecord::to("testing-errors")
             .payload(actual_json_msg)
@@ -237,7 +222,6 @@ async fn test_erroring_listener() {
     );
     info!("Erroring listener test completed!! 🚀");
     
-    // Send shutdown signal and wait a bit to ensure it's processed
     shutdown_tx.send(true).unwrap();
-    sleep(Duration::from_secs(2)).await;  // Add small delay to ensure shutdown completes
+    sleep(Duration::from_secs(2)).await;
 }

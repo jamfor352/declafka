@@ -6,6 +6,7 @@ edition = "2021"
 [dev-dependencies]
 declafka_lib = { path = "../declafka_lib" }
 declafka_macro = { path = "../declafka_macro" }
+declafka_test_macro = { path = "../declafka_test_macro" }
 testcontainers = { version = "0.23.2", features = ["blocking"] }
 tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }

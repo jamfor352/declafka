@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "declafka_lib",
     "declafka_macro",
+    "declafka_test_macro",
     "integration_tests",
     "example_app"
 ]

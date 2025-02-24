@@ -672,6 +672,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "declafka_test_macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "deranged"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1378,6 +1387,7 @@ version = "0.1.0"
 dependencies = [
  "declafka_lib",
  "declafka_macro",
+ "declafka_test_macro",
  "env_logger",
  "lazy_static",
  "log",
