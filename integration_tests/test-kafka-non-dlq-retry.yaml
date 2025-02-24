@@ -1,0 +1,7 @@
+kafka:
+  default:
+    bootstrap.servers: "localhost:49092"
+    auto.offset.reset: "earliest"
+    security.protocol: "PLAINTEXT"
+  erroring-listener:
+    group.id: "dlq-listener-group"

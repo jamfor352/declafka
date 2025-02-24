@@ -1,4 +1,4 @@
-use global_kafka::{create_producer, get_kafka_container};
+use kafka_testcontainer_provider::{create_producer, provision_kafka_container};
 use logging_setup::log_setup;
 use declafka_macro::kafka_listener;
 use rdkafka::producer::FutureRecord;
@@ -11,7 +11,7 @@ use std::sync::Arc;
 use lazy_static::lazy_static;
 use log::info;
 
-mod global_kafka;
+mod kafka_testcontainer_provider;
 mod logging_setup;
 
 // Static counters and shared state for our handlers.
@@ -21,7 +21,6 @@ lazy_static! {
     static ref FAILED_COUNT: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     static ref GLOBAL_STATE: Arc<Mutex<HashMap<u32, TestMessage>>> =
         Arc::new(Mutex::new(HashMap::new()));
-    static ref LOG_SET_UP: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
 }
 
 // Test message type.
@@ -50,11 +49,26 @@ fn string_deserializer(payload: &[u8]) -> Option<String> {
 #[kafka_listener(
     topic = "test-topic",
     listener_id = "test-listener",
-    yaml_path = "test-kafka.yaml",
+    yaml_path = "test-kafka-basic.yaml",
+    deserializer = "json_deserializer",
+)]
+fn test_handler(msg: TestMessage) -> Result<(), Error> {
+    PROCESSED_COUNT.fetch_add(1, Ordering::SeqCst);
+    let mut state = GLOBAL_STATE.lock().unwrap();
+    state.insert(msg.id, msg.clone());
+    info!("Updated state with message: {:?}", msg.to_string());
+    Ok(())
+}
+
+// Define handlers outside of tests.
+#[kafka_listener(
+    topic = "test-topic-2",
+    listener_id = "test-listener-2",
+    yaml_path = "test-kafka-dlq.yaml",
     deserializer = "json_deserializer",
     dlq_topic = "test-topic-dlq"
 )]
-fn test_handler(msg: TestMessage) -> Result<(), Error> {
+fn test_handler_2(msg: TestMessage) -> Result<(), Error> {
     PROCESSED_COUNT.fetch_add(1, Ordering::SeqCst);
     let mut state = GLOBAL_STATE.lock().unwrap();
     state.insert(msg.id, msg.clone());
@@ -65,7 +79,7 @@ fn test_handler(msg: TestMessage) -> Result<(), Error> {
 #[kafka_listener(
     topic = "test-topic-dlq",
     listener_id = "dlq-listener",
-    yaml_path = "test-kafka.yaml",
+    yaml_path = "test-kafka-dlq.yaml",
     deserializer = "string_deserializer"
 )]
 fn test_topic_dlq_handler(_msg: String) -> Result<(), Error> {
@@ -77,7 +91,7 @@ fn test_topic_dlq_handler(_msg: String) -> Result<(), Error> {
 #[kafka_listener(
     topic = "testing-errors",
     listener_id = "erroring-listener",
-    yaml_path = "test-kafka.yaml",
+    yaml_path = "test-kafka-non-dlq-retry.yaml",
     deserializer = "string_deserializer",
     retry_max_attempts = 5,
     retry_initial_backoff = 100,
@@ -99,8 +113,12 @@ fn get_state_for_id(id: u32) -> Option<TestMessage> {
 async fn test_kafka_functionality() {
     log_setup();
 
-    let _container_info = get_kafka_container().await;
-    let producer = create_producer();
+    let mapped_port = 29092;
+    let controller_port = 29093;
+    let topics = ["test-topic"];
+    
+    let _container_info = provision_kafka_container(mapped_port, controller_port, &topics).await;
+    let producer = create_producer(mapped_port);
 
     PROCESSED_COUNT.store(0, Ordering::SeqCst);
 
@@ -147,11 +165,15 @@ async fn test_kafka_functionality() {
 async fn test_failing_listener() {
     log_setup();
 
-    let _container_info = get_kafka_container().await;
-    let producer = create_producer();
+    let mapped_port = 39092;
+    let controller_port = 39093;
+    let topics = ["test-topic-2", "test-topic-dlq"];
+    
+    let _container_info = provision_kafka_container(mapped_port, controller_port, &topics).await;
+    let producer = create_producer(mapped_port);
 
     DLQ_ACTIVATION_COUNT.store(0, Ordering::SeqCst);
-    let listener1 = test_handler_listener().expect("Failed to create test listener");
+    let listener1 = test_handler_2_listener().expect("Failed to create test listener");
     let shutdown_tx = listener1.start();
     let listener2 = test_topic_dlq_handler_listener().expect("Failed to create DLQ listener");
     let shutdown_tx2 = listener2.start();
@@ -159,7 +181,7 @@ async fn test_failing_listener() {
     let actual_json_msg = "{\"id\":\"will fail as it is not a number\",\"content\":\"test message 0\"}";
     info!("Sending broken message: {:?}", actual_json_msg);
     producer.send(
-        FutureRecord::to("test-topic")
+        FutureRecord::to("test-topic-2")
             .payload(actual_json_msg)
             .key("1"),
         Duration::from_secs(5),
@@ -185,8 +207,12 @@ async fn test_failing_listener() {
 async fn test_erroring_listener() {
     log_setup();
 
-    let _container_info = get_kafka_container().await;
-    let producer = create_producer();
+    let mapped_port = 49092;
+    let controller_port = 49093;
+    let topics = ["testing-errors"];
+    
+    let _container_info = provision_kafka_container(mapped_port, controller_port, &topics).await;
+    let producer = create_producer(mapped_port);
 
     FAILED_COUNT.store(0, Ordering::SeqCst);
     let erroring_listener = erroring_handler_listener().expect("Failed to create DLQ listener");
