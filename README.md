@@ -157,7 +157,7 @@ fn handle_message(msg: MyMessage) -> Result<(), declafka_lib::Error>
     Ok(())
 
 #[begin_listeners(
-     listeners = [handle_message_listener]
+     listeners = [handle_message_listener] // note this is the name of the above function with the _listener suffix added - this is important
 )]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
