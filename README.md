@@ -166,6 +166,58 @@ async fn main()
 
 ---
 
+## Testing Kafka Consumers
+
+The `declafka` library provides a convenient way to test Kafka consumers using the `#[kafka_test]` macro. This is provided by the `declafka_test_macro` crate. This macro automatically handles the setup and teardown of Kafka test containers, making it easy to write integration tests.
+
+### Using the `kafka_test` Macro
+
+The `kafka_test` macro accepts the following parameters:
+- `topics`: Array of topic names to create in the test container
+- `port`: The port to map Kafka to (default: 29092)
+- `controller_port`: The port for Kafka's controller (default: 29093)
+- `listeners`: Array of Kafka listener functions to start during the test
+
+Example usage:
+
+```rust
+#[kafka_test(
+    topics = ["test-topic", "dlq-topic"],
+    port = 29092,
+    controller_port = 29093,
+    listeners = [my_kafka_listener, my_dlq_listener]
+)]
+async fn test_kafka_functionality() {
+    // Your test code here
+    // The container and producer are automatically set up
+    // Listeners are started before your test runs
+    // Cleanup happens automatically after your test
+}
+```
+
+### Features
+- **Automatic Container Management**: Creates and manages Kafka test containers
+- **Topic Creation**: Automatically creates specified topics
+- **Listener Management**: Starts and stops Kafka listeners
+- **Cleanup**: Handles graceful shutdown of listeners and containers
+- **Producer Setup**: Provides a configured `FutureProducer` for sending test messages
+
+### Example Tests
+Check out our [integration tests](integration_tests/tests/integration_test.rs) for complete examples, including:
+- Basic message processing
+- Dead Letter Queue (DLQ) testing
+- Error handling and retries
+
+### Best Practices
+1. Use unique ports for different tests to allow parallel execution
+2. Keep test logic focused on business requirements
+3. Use the macro's automatic cleanup rather than manual shutdown
+
+### Prerequisites
+Make sure you have Docker installed and running, as the tests use test containers.
+
+---
+
 ## Advanced Usage
 
 ### Retries
@@ -203,8 +255,6 @@ async fn main() -> std::io::Result<()>
         .run()
         .await
 ```
-
----
 
 ## License
 
