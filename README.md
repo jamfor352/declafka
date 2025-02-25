@@ -135,15 +135,17 @@ Define a message handler:
 
 ```rust
 use declafka_macro::{kafka_listener, begin_listeners};
-use serde::{Serialize, Deserialize}
+use serde::{Serialize, Deserialize};
 
 #[derive(Clone, Serialize, Deserialize)]
-struct MyMessage
-    field1: String
-    field2: i32
+struct MyMessage {
+    field1: String,
+    field2: i32,
+}
 
-fn json_deserializer(payload: &[u8]) -> Option<MyMessage>
+fn json_deserializer(payload: &[u8]) -> Option<MyMessage> {
     serde_json::from_slice(payload).ok()
+}
 
 #[kafka_listener(
     topic = "my-topic",
@@ -152,16 +154,17 @@ fn json_deserializer(payload: &[u8]) -> Option<MyMessage>
     deserializer = "json_deserializer",
     dlq_topic = "my-topic-dlq",
 )]
-fn handle_message(msg: MyMessage) -> Result<(), declafka_lib::Error>
-    println!("Got message: {}", msg.field1)
+fn handle_message(msg: MyMessage) -> Result<(), declafka_lib::Error> {
+    println!("Got message: {}", msg.field1);
     Ok(())
+}
 
 #[begin_listeners(
      listeners = [handle_message_listener] // note this is the name of the above function with the _listener suffix added - this is important
 )]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    tokio::signal::ctrl_c().await.unwrap()
+    tokio::signal::ctrl_c().await.unwrap();
     Ok(())
 }
 ```
