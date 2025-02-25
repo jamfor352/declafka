@@ -238,12 +238,12 @@ pub fn kafka_listener(attrs: TokenStream, item: TokenStream) -> TokenStream {
     // Determine which consumer backend to use.
     let consumer_code = if let Some(backend) = args.backend {
         if backend == "in_memory" {
-            quote! { declafka_lib::MockKafkaConsumer::new() }
+            quote! { declafka_lib::mock_consumer::MockKafkaConsumer::new() }
         } else {
-            quote! { declafka_lib::RDKafkaConsumer::new(#yaml_path, #listener_id, #topic_str)? }
+            quote! { declafka_lib::rdkafka_consumer::RDKafkaConsumer::new(#yaml_path, #listener_id, #topic_str)? }
         }
     } else {
-        quote! { declafka_lib::RDKafkaConsumer::new(#yaml_path, #listener_id, #topic_str)? }
+        quote! { declafka_lib::rdkafka_consumer::RDKafkaConsumer::new(#yaml_path, #listener_id, #topic_str)? }
     };
 
     let expanded = quote! {

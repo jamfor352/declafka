@@ -10,11 +10,6 @@ pub mod kafka_config;
 use async_trait::async_trait;
 use chrono;
 use log::{debug, info, warn};
-use rdkafka::client::ClientContext;
-use rdkafka::consumer::{CommitMode, Consumer, ConsumerContext, StreamConsumer};
-use rdkafka::{ClientConfig, Offset};
-use rdkafka::Message; // For methods like topic(), offset(), etc.
-use rdkafka::producer::{FutureProducer, FutureRecord};
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::collections::HashMap;
@@ -28,6 +23,10 @@ use tokio::sync::watch;
 // -----------------------------------------------------------------------------
 // Kafka Consumer Abstraction
 // -----------------------------------------------------------------------------
+
+
+pub mod mock_consumer;
+pub mod rdkafka_consumer;
 
 /// A simplified error type for consumer operations.
 #[derive(Debug)]
@@ -43,7 +42,7 @@ pub struct KafkaMessage {
     pub partition: i32,
     pub offset: i64,
     pub payload: Option<Vec<u8>>,
-    pub key: Option<Vec<u8>>,
+    pub key: Option<String>,
 }
 
 /// Trait for Kafka consumer backends.
@@ -67,204 +66,13 @@ pub enum DLQError {
 /// Trait to abstract DLQ producers.
 #[async_trait]
 pub trait DLQProducer: Send + Sync {
-    async fn send(&self, payload: &str, dlq_topic: &str) -> Result<(i32, i64), DLQError>;
+    async fn send(&self, key: &str, payload: &str, dlq_topic: &str) -> Result<(i32, i64), DLQError>;
 }
 
 /// Trait for consumer backends to supply a default DLQ producer.
 pub trait DLQProducerFactory {
-    fn default_dlq_producer(yaml_path: &str, listener_id: &str) -> Box<dyn DLQProducer>;
+    fn default_dlq_producer(&self, yaml_path: &str, listener_id: &str) -> Box<dyn DLQProducer>;
 }
-
-/// Real DLQ producer implementation (only used in the real consumer).
-pub struct RDKafkaDLQProducer {
-    pub inner: FutureProducer,
-}
-
-#[async_trait]
-impl DLQProducer for RDKafkaDLQProducer {
-    async fn send(&self, payload: &str, dlq_topic: &str) -> Result<(i32, i64), DLQError> {
-        let record = FutureRecord::to(dlq_topic)
-            .payload(payload)
-            .key("");
-        self.inner.send(record, Duration::from_secs(5))
-            .await
-            .map_err(|(e, _)| DLQError::ProducerError(e.to_string()))
-    }
-}
-
-/// Mock DLQ producer for testing.
-pub struct MockDLQProducer;
-
-#[async_trait]
-impl DLQProducer for MockDLQProducer {
-    async fn send(&self, payload: &str, dlq_topic: &str) -> Result<(i32, i64), DLQError> {
-        info!("(Mock) DLQ send to {}: {}", dlq_topic, payload);
-        Ok((0, 0))
-    }
-}
-
-// -----------------------------------------------------------------------------
-// RDKafka-based Consumer Implementation (Real Backend)
-// -----------------------------------------------------------------------------
-
-#[derive(Clone)]
-struct CustomContext {
-    offset_tracker: Arc<Mutex<HashMap<(String, i32), i64>>>,
-}
-
-impl ClientContext for CustomContext {}
-
-impl ConsumerContext for CustomContext {
-    fn pre_rebalance(
-        &self,
-        _base_consumer: &rdkafka::consumer::BaseConsumer<CustomContext>,
-        rebalance: &rdkafka::consumer::Rebalance,
-    ) {
-        info!("Pre-rebalance: {:?}", rebalance);
-    }
-
-    fn post_rebalance(
-        &self,
-        base_consumer: &rdkafka::consumer::BaseConsumer<CustomContext>,
-        rebalance: &rdkafka::consumer::Rebalance,
-    ) {
-        info!("Post-rebalance: {:?}", rebalance);
-        if let rdkafka::consumer::Rebalance::Revoke(partitions) = rebalance {
-            let tracker = self.offset_tracker.lock().unwrap();
-            let mut tpl = rdkafka::TopicPartitionList::new();
-            for tp in partitions.elements() {
-                if let Some(&offset) = tracker.get(&(tp.topic().to_string(), tp.partition())) {
-                    tpl.add_partition_offset(tp.topic(), tp.partition(), Offset::Offset(offset))
-                        .unwrap_or_else(|e| warn!("Failed to add partition to TPL: {}", e));
-                }
-            }
-            if tpl.count() > 0 {
-                if let Err(e) = base_consumer.commit(&tpl, CommitMode::Sync) {
-                    warn!("Failed to commit offsets during rebalance: {}", e);
-                }
-            }
-        }
-    }
-}
-
-/// Real consumer backend using rdkafka.
-pub struct RDKafkaConsumer {
-    consumer: StreamConsumer<CustomContext>,
-}
-
-impl RDKafkaConsumer {
-    pub fn new(yaml_path: &str, listener_id: &str, topic: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let config = kafka_config::load_config(yaml_path, listener_id)?;
-        let context = CustomContext {
-            offset_tracker: Arc::new(Mutex::new(HashMap::new())),
-        };
-        let consumer: StreamConsumer<CustomContext> = config.create_with_context(context)?;
-        consumer.subscribe(&[topic])
-            .map_err(|e| format!("Failed to subscribe: {}", e))?;
-        Ok(Self { consumer })
-    }
-}
-
-#[async_trait]
-impl KafkaConsumer for RDKafkaConsumer {
-    async fn subscribe(&self, topics: &[String]) -> Result<(), KafkaConsumerError> {
-        let topic_refs: Vec<&str> = topics.iter().map(|s| s.as_str()).collect();
-        self.consumer.subscribe(&topic_refs)
-            .map_err(|e| KafkaConsumerError::RecvError(format!("Subscribe error: {}", e)))?;
-        Ok(())
-    }
-
-    async fn recv(&self) -> Result<KafkaMessage, KafkaConsumerError> {
-        match self.consumer.recv().await {
-            Ok(m) => Ok(KafkaMessage {
-                topic: m.topic().to_string(),
-                partition: m.partition(),
-                offset: m.offset(),
-                payload: m.payload().map(|p| p.to_vec()),
-                key: m.key().map(|k| k.to_vec()),
-            }),
-            Err(e) => Err(KafkaConsumerError::RecvError(e.to_string())),
-        }
-    }
-
-    async fn commit(&self, topic: &str, partition: i32, offset: i64) -> Result<(), KafkaConsumerError> {
-        let mut tpl = rdkafka::TopicPartitionList::new();
-        tpl.add_partition_offset(topic, partition, Offset::Offset(offset))
-            .map_err(|e| KafkaConsumerError::CommitError(e.to_string()))?;
-        self.consumer.commit(&tpl, CommitMode::Sync)
-            .map_err(|e| KafkaConsumerError::CommitError(e.to_string()))
-    }
-}
-
-impl DLQProducerFactory for RDKafkaConsumer {
-    fn default_dlq_producer(yaml_path: &str, listener_id: &str) -> Box<dyn DLQProducer> {
-        let config = kafka_config::load_config(yaml_path, listener_id)
-            .expect("Failed to load config for DLQ producer");
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", config.get("bootstrap.servers").unwrap_or("localhost:9092"))
-            .set("message.timeout.ms", "5000")
-            .create()
-            .expect("Failed to create DLQ producer");
-        Box::new(RDKafkaDLQProducer { inner: producer })
-    }
-}
-
-// -----------------------------------------------------------------------------
-// In-memory Consumer Implementation (Mock Backend)
-// -----------------------------------------------------------------------------
-
-use tokio::sync::mpsc::{self, Sender, Receiver};
-
-/// In-memory Kafka consumer for testing.
-pub struct MockKafkaConsumer {
-    topics: Arc<Mutex<Vec<String>>>,
-    sender: Sender<KafkaMessage>,
-    receiver: Arc<tokio::sync::Mutex<Receiver<KafkaMessage>>>,
-}
-
-impl MockKafkaConsumer {
-    pub fn new() -> Self {
-        let (sender, receiver) = mpsc::channel(100);
-        Self {
-            topics: Arc::new(Mutex::new(vec![])),
-            sender,
-            receiver: Arc::new(tokio::sync::Mutex::new(receiver)),
-        }
-    }
-
-    /// Helper: send a message into the in-memory consumer.
-    pub async fn send(&self, msg: KafkaMessage) {
-        let _ = self.sender.send(msg).await;
-    }
-}
-
-#[async_trait]
-impl KafkaConsumer for MockKafkaConsumer {
-    async fn subscribe(&self, topics: &[String]) -> Result<(), KafkaConsumerError> {
-        let mut t = self.topics.lock().unwrap();
-        *t = topics.to_vec();
-        Ok(())
-    }
-
-    async fn recv(&self) -> Result<KafkaMessage, KafkaConsumerError> {
-        let mut rx = self.receiver.lock().await;
-        rx.recv().await.ok_or(KafkaConsumerError::RecvError("Channel closed".into()))
-    }
-
-    async fn commit(&self, _topic: &str, _partition: i32, _offset: i64) -> Result<(), KafkaConsumerError> {
-        Ok(())
-    }
-}
-
-impl DLQProducerFactory for MockKafkaConsumer {
-    fn default_dlq_producer(_yaml_path: &str, _listener_id: &str) -> Box<dyn DLQProducer> {
-        Box::new(MockDLQProducer)
-    }
-}
-
-// -----------------------------------------------------------------------------
-// RetryConfig, Error, Metrics, HealthCheck
-// -----------------------------------------------------------------------------
 
 pub struct RetryConfig {
     pub max_attempts: u32,
@@ -484,11 +292,12 @@ where
             "payload": msg.payload.as_ref().map(|p| String::from_utf8_lossy(p)).unwrap_or_default(),
         });
         let payload_str = serde_json::to_string(&dlq_payload).unwrap();
+        let key = msg.key.clone().unwrap_or_default();
         warn!("DLQ payload prepared: {}", payload_str);
         if let Some(producer) = &self.dead_letter_producer {
-            producer.send(&payload_str, dlq_topic).await.map(|(partition, offset)| {
+            producer.send(&key, &payload_str, dlq_topic).await.map(|(partition, offset)| {
                 self.metrics.dead_letter_messages.fetch_add(1, Ordering::Relaxed);
-                warn!("Successfully sent to DLQ topic {} (partition: {}, offset: {})", dlq_topic, partition, offset);
+                warn!("Successfully sent message with key {} to DLQ topic {} (partition: {}, offset: {})", &key, dlq_topic, partition, offset);
             })
         } else {
             Err(DLQError::ProducerError("No DLQ producer configured".into()))
@@ -572,7 +381,7 @@ where
     /// Builder method that configures the DLQ by using the consumer's default DLQ producer.
     pub fn with_dead_letter_queue(mut self, dlq_topic: &str) -> Self {
         self.dlq_topic = Some(dlq_topic.to_string());
-        self.dead_letter_producer = Some(C::default_dlq_producer(&self.yaml_path, &self.listener_id));
+        self.dead_letter_producer = Some(self.consumer.default_dlq_producer(&self.yaml_path, &self.listener_id));
         self
     }
 
@@ -609,15 +418,20 @@ async fn wait_for_shutdown() {
 // -----------------------------------------------------------------------------
 // Unit tests using the in-memory (mock) implementation
 // -----------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
+
+    use log::LevelFilter;
+
+    use crate::mock_consumer::{MockDLQProducer, MockKafkaConsumer};
+
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-
+    
     #[tokio::test]
     async fn test_process_message_success() {
+        let _result = env_logger::builder().filter_level(LevelFilter::Debug).try_init();
         let mock_consumer = MockKafkaConsumer::new();
         let processed_count = Arc::new(AtomicUsize::new(0));
         let count_clone = processed_count.clone();
@@ -648,6 +462,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_message_failure_and_retry() {
+        let _result = env_logger::builder().filter_level(LevelFilter::Debug).try_init();
         let mock_consumer = MockKafkaConsumer::new();
         let attempt_count = Arc::new(AtomicUsize::new(1));
         let count_clone = attempt_count.clone();
@@ -676,5 +491,43 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(attempt_count.load(Ordering::SeqCst), 4);
     }
+
+    #[tokio::test]
+    async fn test_process_message_failure_and_dlq() {
+        // setup logging with debug level
+        let _result = env_logger::builder().filter_level(LevelFilter::Debug).try_init();
+        let mock_consumer = MockKafkaConsumer::new();
+        let mock_consumer_clone = mock_consumer.clone();
+        let deserializer = |payload: &[u8]| std::str::from_utf8(payload).ok().map(|s| s.to_string());   
+        let handler = |_msg: String| {
+            Err(Error::ProcessingFailed("fail".into()))
+        };
+        let listener: KafkaListener<String, _> = KafkaListener::new(
+            "test-topic",
+            "test-listener",
+            "dummy.yaml",
+            deserializer,
+            handler,
+            mock_consumer,
+        ).unwrap()
+        .with_dead_letter_queue("test-dlq");
+
+        let test_msg = KafkaMessage {
+            topic: "test-topic".to_string(),
+            partition: 0,
+            offset: 0,
+            payload: Some(b"test message".to_vec()),
+            key: None,
+        };
+        let result = listener.process_message(test_msg).await;
+        assert!(result.is_err());
+        
+        let dlq_producer = mock_consumer_clone.get_dlq_messages();
+        let dlq_messages = dlq_producer.values().cloned().collect::<Vec<_>>();
+        assert_eq!(dlq_messages.len(), 1);
+        let dlq_msg = &dlq_messages[0];
+        assert!(dlq_msg.contains("test-topic"));
+    }
+
 }
 
